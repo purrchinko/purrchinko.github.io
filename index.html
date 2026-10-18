@@ -9,7 +9,7 @@
   <meta property="og:description" content="A cozy, endless cat-themed pachinko puzzle full of bouncing marbles, clever blocks, and mischievous cats." />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <title>Purrchinko</title>
-  <link rel="stylesheet" href="styles.css?v=4" />
+  <link rel="stylesheet" href="styles.css?v=7" />
 </head>
 <body>
   <main class="game-frame" id="frame" aria-label="Purrchinko game">
@@ -27,11 +27,20 @@
       <button type="button" class="audio-toggle" id="musicBtn" aria-label="Music off" aria-pressed="false"><span>Music</span><b id="musicState">OFF</b></button>
       <button type="button" class="soft-btn" id="restartBtn" aria-label="Start again">↺</button>
     </div>
+    <section class="game-over" id="gameOver" role="dialog" aria-modal="true" aria-labelledby="gameOverTitle" hidden>
+      <div class="game-over-card">
+        <span class="game-over-cat" aria-hidden="true">🐈</span>
+        <p class="game-over-kicker">RUN ENDED</p>
+        <h1 id="gameOverTitle">Out of marbles</h1>
+        <p class="game-over-distance"><b id="finalDistance">0</b><span>meters travelled</span></p>
+        <button type="button" class="play-again-btn" id="playAgainBtn">Play again <span aria-hidden="true">↻</span></button>
+      </div>
+    </section>
     <div class="game-metadata" hidden aria-hidden="true">
       <span id="scoreCount">0</span><span id="chapterLabel"></span><span id="eraLabel"></span><span id="comboCount"></span>
       <div id="progressFill"></div><span id="progressText"></span><div id="discoveries"></div>
     </div>
   </main>
-  <script src="game.js?v=4"></script>
+  <script src="game.js?v=9"></script>
 </body>
 </html>
