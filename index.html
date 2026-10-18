@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f8efdf" />
+  <meta name="description" content="Purrchinko is a cozy, endless cat-themed pachinko puzzle. Launch marbles, combine blocks, ring bells, and wander through a playful mechanical maze with mischievous cats." />
+  <meta property="og:title" content="Purrchinko" />
+  <meta property="og:description" content="A cozy, endless cat-themed pachinko puzzle full of bouncing marbles, clever blocks, and mischievous cats." />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <title>Purrchinko</title>
+  <link rel="stylesheet" href="styles.css?v=4" />
+</head>
+<body>
+  <main class="game-frame" id="frame" aria-label="Purrchinko game">
+    <canvas id="game" width="600" height="900" tabindex="0" aria-label="Aim and release a marble. Match and move blocks, ring brass bells, free cats, and travel downward."></canvas>
+    <div class="board-hud" aria-label="Marbles, depth, and the current switch objective">
+      <span class="marbles"><span aria-hidden="true">●</span> <b id="ballCount">32</b></span>
+      <span class="goal-line" id="goalText" aria-live="polite">♬ 0/2 bells · gate +10 ●</span>
+      <span class="depth">↓ <b id="depthCount">0</b>m <span class="gate-tally" id="zoneSymbol" aria-label="Jelly Orchard">❀</span></span>
+    </div>
+    <div class="board-controls">
+      <button type="button" class="icon-btn" id="pauseBtn" aria-label="Pause game">Ⅱ</button>
+    </div>
+    <div class="pause-controls" id="pauseControls" hidden>
+      <button type="button" class="audio-toggle" id="effectsBtn" aria-label="Game effects on" aria-pressed="true"><span>Effects</span><b id="effectsState">ON</b></button>
+      <button type="button" class="audio-toggle" id="musicBtn" aria-label="Music off" aria-pressed="false"><span>Music</span><b id="musicState">OFF</b></button>
+      <button type="button" class="soft-btn" id="restartBtn" aria-label="Start again">↺</button>
+    </div>
+    <div class="game-metadata" hidden aria-hidden="true">
+      <span id="scoreCount">0</span><span id="chapterLabel"></span><span id="eraLabel"></span><span id="comboCount"></span>
+      <div id="progressFill"></div><span id="progressText"></span><div id="discoveries"></div>
+    </div>
+  </main>
+  <script src="game.js?v=4"></script>
+</body>
+</html>
