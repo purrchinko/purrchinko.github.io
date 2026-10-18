@@ -1016,7 +1016,7 @@ function drawHopper(){
  if(surge>0){const pulse=.5+Math.sin(state.worldTime*17)*.14;ctx.shadowColor='#f0bd59';ctx.shadowBlur=14;ctx.strokeStyle='#f1c96f';ctx.globalAlpha=.76+pulse*.22;ctx.lineWidth=4;ctx.beginPath();ctx.arc(300,53,41,-Math.PI/2,-Math.PI/2+TAU*surge);ctx.stroke();ctx.shadowBlur=0;ctx.globalAlpha=.5;for(let i=0;i<8;i++){const a=state.worldTime*1.8+i*TAU/8;ellipse(300+Math.cos(a)*47,53+Math.sin(a)*47,2.4,2.4);ctx.fillStyle='#f3d381';ctx.fill();}ctx.globalAlpha=1;}
  ctx.strokeStyle=surge>0?'#f1c96f':'#d8cfb8';ctx.lineWidth=3;ellipse(300,53,33,33);ctx.stroke();
  ctx.fillStyle=p.ink;catFace(300,50,.9,p.ink,p.paper);ctx.fillStyle=p.colors[0];ellipse(300,88,7.5,7.5);ctx.fill();
- for(let i=0;i<CAT_TYPES.length;i++){ctx.globalAlpha=i<state.unlockedCats?1:state.catCollection.has(i)?.32:.13;catFace(48+i*38,94,.42,CAT_TYPES[i].color,p.paper);}ctx.restore();
+ ctx.restore();
 }
 function drawBorders(){const p=THEMES[state.phase];ctx.strokeStyle=p.ink;ctx.globalAlpha=.65;ctx.lineWidth=5;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(21,112);ctx.lineTo(21,812);ctx.moveTo(579,112);ctx.lineTo(579,812);ctx.stroke();ctx.globalAlpha=1;for(const y of [240,650]){ctx.fillStyle=p.accent;ellipse(21,y,3.5,6);ctx.fill();ellipse(579,y,3.5,6);ctx.fill();}}
 function drawCat(t){
