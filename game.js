@@ -39,7 +39,7 @@ const CAT_TYPES=[
 ];
 function createRunState(){
  return {
-  paused:false,ended:false,reserve:32,shots:0,score:0,bestChain:0,chain:0,chainTime:-100,
+  paused:false,ended:false,newDistanceRecord:false,recordFlairUntil:0,reserve:32,shots:0,score:0,bestChain:0,chain:0,chainTime:-100,
   phase:0,worldTime:0,frame:0,active:[],tiles:[],grid:Array.from({length:ROWS},()=>Array(COLS).fill(null)),
   particles:[],events:[],nextBallId:1,nextTileId:1,aimX:300,aimY:530,aimAngle:0,
   pointerDown:false,pointerFired:false,holdTime:0,keyboardFire:false,shootCooldown:0,shootRepeat:.18,
@@ -50,9 +50,33 @@ function createRunState(){
   gates:[],gatesPassed:0,pushes:0,rewardedChainGate:-1,courseSeed:0,mergeFX:[],catsFreed:0,gateAwards:[],catActions:0
  };
 }
-const state={...createRunState(),started:false,soundEnabled:true,musicEnabled:false,catCollection:new Set()};
+const state={...createRunState(),started:false,soundEnabled:true,musicEnabled:false,catCollection:new Set(),bestDistance:0};
 function readSaved(key,fallback=null){try{const current=`purrchinko.${key}`;let value=localStorage.getItem(current);if(value!==null)return value;value=localStorage.getItem(`purrpetual.${key}`);if(value!==null)localStorage.setItem(current,value);return value??fallback;}catch(e){return fallback;}}
-function writeSaved(key,value){try{localStorage.setItem(`purrchinko.${key}`,value);}catch(e){}}
+function writeSaved(key,value){try{localStorage.setItem(`purrchinko.${key}`,value);return true;}catch(e){return false;}}
+function readBestDistance(){
+ const value=Number(readSaved('bestDistance','0'));
+ return Number.isFinite(value)&&value>0?Math.floor(value):0;
+}
+let savedBestDistance=readBestDistance();state.bestDistance=savedBestDistance;
+function updateDistanceUI(){
+ const distance=Math.floor(state.cameraY/10);
+ if(distance>state.bestDistance){
+  if(!state.newDistanceRecord)state.recordFlairUntil=state.worldTime+4;
+  state.bestDistance=distance;state.newDistanceRecord=true;
+ }
+ else if(distance<state.bestDistance)state.newDistanceRecord=false;
+ const showFlair=state.newDistanceRecord&&state.worldTime<state.recordFlairUntil;
+ setText('depthCount',distance);
+ $('distanceReadout').classList.toggle('is-record',showFlair);
+ $('distanceRecordBadge').hidden=!showFlair;
+}
+function persistBestDistance(){
+ // Save with run checkpoints, rather than writing storage on every scrolling frame.
+ if(state.bestDistance>savedBestDistance){
+  state.bestDistance=Math.max(state.bestDistance,readBestDistance());updateDistanceUI();
+  if(writeSaved('bestDistance',String(state.bestDistance)))savedBestDistance=state.bestDistance;
+ }
+}
 try{state.catCollection=new Set(JSON.parse(readSaved('cats','[]')).filter(i=>Number.isInteger(i)&&i>=0&&i<CAT_TYPES.length));}catch(e){}
 let phys=null;
 const M=window.Matter||null;
@@ -487,7 +511,7 @@ function updateCourse(dt){
  updateBoss(dt);const old=state.cameraY;state.cameraY=Math.min(state.cameraTarget,state.cameraY+dt*410);
  if(state.cameraY!==old){
   state.aimY+=state.cameraY-old;
-  setText('depthCount',Math.floor(state.cameraY/10));
+  updateDistanceUI();
   // Recalled marbles travel with the launcher instead of teleporting into obstacles.
   for(const b of state.active)if(!b.dead&&b.y<state.cameraY+95){removeBall(b);}
   for(const t of state.tiles)if(!t.removed&&tilePos(t).y<state.cameraY+60)destroyTile(t);
@@ -548,9 +572,10 @@ function clear(){
  $('gameOver').hidden=true;$('frame').classList.remove('is-ended');updateUI();$('pauseBtn').textContent='Ⅱ';$('pauseControls').hidden=true;$('pauseBtn').setAttribute('aria-label','Pause game');
 }
 let lastRunSaveTime=-Infinity;
-const RUN_TRANSIENT_KEYS=new Set(['grid','active','tiles','events','particles','mergeFX','catLinks','paused','pointerDown','pointerFired','keyboardFire','holdTime','soundEnabled','musicEnabled']);
+const RUN_TRANSIENT_KEYS=new Set(['grid','active','tiles','events','particles','mergeFX','catLinks','paused','pointerDown','pointerFired','keyboardFire','holdTime','soundEnabled','musicEnabled','bestDistance']);
 function saveRun(force=false){
  if(!state.started||(!force&&state.worldTime-lastRunSaveTime<RUN_SAVE_INTERVAL))return false;
+ updateDistanceUI();persistBestDistance();
  const savedState={};for(const [key,value] of Object.entries(state))if(!RUN_TRANSIENT_KEYS.has(key))savedState[key]=value;
  const snapshot={version:1,rows:ROWS,seed,state:savedState,tiles:state.tiles.filter(t=>!t.removed),active:state.active.filter(b=>!b.dead)};
  try{writeSaved('run',JSON.stringify(snapshot,(key,value)=>{if(key==='body'||key==='trail')return undefined;if(value instanceof Set)return{__purrchinkoSet:[...value]};return value;}));lastRunSaveTime=state.worldTime;return true;}catch(e){return false;}
@@ -567,7 +592,7 @@ function restoreRun(){
   for(const b of state.active){b.body=null;b.dead=false;b.held=false;b.trail??=[];b.lastContacts??={};phys.addBall(b);}
   if(state.ended){$('pauseBtn').innerHTML='↺';$('pauseBtn').setAttribute('aria-label','Play again');showGameOver();}
   else{$('pauseBtn').textContent='Ⅱ';$('pauseBtn').setAttribute('aria-label','Pause game');}
-  $('pauseControls').hidden=true;updateUI();lastRunSaveTime=state.worldTime;return true;
+  $('pauseControls').hidden=true;updateUI();persistBestDistance();lastRunSaveTime=state.worldTime;return true;
  }catch(e){try{localStorage.removeItem('purrchinko.run');}catch{}return false;}
 }
 function addBall(x,y,vx,vy,options={}){if(state.active.length>96)return null;const b={id:state.nextBallId++,x,y,vx,vy,r:7.25,color:options.color||pick(MARBLE_COLORS),age:0,trail:[],dead:false,held:false,lastContacts:{}};state.active.push(b);phys.addBall(b);return b;}
@@ -596,7 +621,7 @@ function createShot(){
 function updateUI(){
  state.reserve=clamp(state.reserve,0,160);
  const boosting=state.worldTime<state.boostUntil||state.finalWaveActive||state.showerActive;
- setText('depthCount',Math.floor(state.cameraY/10));setText('zoneSymbol',currentZone().symbol);$('zoneSymbol').setAttribute('aria-label',currentZone().name);
+ updateDistanceUI();setText('zoneSymbol',currentZone().symbol);$('zoneSymbol').setAttribute('aria-label',currentZone().name);
  const gate=state.gates[state.gatesPassed],done=gate?gate.bolts.filter((v,i)=>gate.maxBolts[i]>0&&v===0).length:0,need=gate?gate.maxBolts.filter(v=>v>0).length:0,goal=$('goalText');
  if(goal){
   if(state.finalWaveUsed&&state.reserve===0)setText('goalText','LAST MARBLE SHOWER');
@@ -900,6 +925,9 @@ function startFinalWave(){
  sparkle(300,state.cameraY+93,'#f3d381',52,1.35);sound('boost');updateUI();
 }
 function showGameOver(){
+ updateDistanceUI();persistBestDistance();
+ setText('finalRecord',state.newDistanceRecord?'NEW DISTANCE RECORD':`BEST DISTANCE · ${state.bestDistance.toLocaleString('en-US')}m`);
+ $('finalRecord').classList.toggle('is-record',state.newDistanceRecord);
  $('finalDistance').textContent=Math.floor(state.cameraY/10).toLocaleString('en-US');
  $('gameOver').hidden=false;$('frame').classList.add('is-ended');
  $('playAgainBtn').focus({preventScroll:true});
@@ -1271,7 +1299,9 @@ function stepSimulation(dt){
   if(state.holdTime>.26&&state.shootCooldown<=0&&createShot())state.pointerFired=true;
  }
  if(state.keyboardFire&&state.shootCooldown<=0)createShot();
- prePhysics(dt);phys.step(dt);updateContraptions(dt);postPhysics(dt);saveRun();
+ prePhysics(dt);phys.step(dt);updateContraptions(dt);postPhysics(dt);
+ if(state.recordFlairUntil>0&&state.worldTime>=state.recordFlairUntil){state.recordFlairUntil=0;updateDistanceUI();}
+ saveRun();
 }
 let previous=performance.now(),acc=0;
 function loop(now){

@@ -12,7 +12,7 @@
   <title>Purrchinko</title>
   <style>
 :root{color-scheme:light;--ink:#31545a;--paper:#fff7e8;--cream:#f8efdf}
-*{box-sizing:border-box}
+*{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--cream);color:var(--ink);font-family:'Trebuchet MS',Avenir,'Segoe UI',sans-serif;overscroll-behavior:none}
 body{display:grid;place-items:center;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 button{font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
@@ -31,6 +31,9 @@ canvas{display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}
 
 .depth{font-size:clamp(11px,2.5vw,14px);color:inherit}.depth b{font-weight:700}.gate-tally{display:inline-block;margin-left:8px;color:#9c8867;font-size:.85em}
 
+.depth.is-record{width:fit-content;margin-left:-5px;padding:2px 5px;border-radius:6px;background:#f7df9d;color:#78551e}
+.distance-record-badge{display:inline-block;margin-left:5px;padding:2px 5px;border-radius:5px;background:#f7df9d;color:#78551e;font-size:8px;font-weight:800;letter-spacing:.025em;vertical-align:middle}
+
 .goal-line{font-size:clamp(9px,2.3vw,12px);font-weight:700;color:inherit;opacity:.87;letter-spacing:.015em;white-space:nowrap;max-width:250px}
 
 .marbles.boosting{color:#a96e2c!important;text-shadow:0 0 12px #f4d27e}.marbles.boosting>span{color:#edbd58}
@@ -48,6 +51,8 @@ canvas{display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}
 .game-over-card h1{margin:0;color:var(--hud-ink,#31545a);font-family:Georgia,serif;font-size:clamp(28px,7vw,38px);line-height:1.05}
 .game-over-distance{display:flex;flex-direction:column;gap:3px;margin:17px 0 23px;color:#6b8178;font-size:12px;letter-spacing:.07em;text-transform:uppercase}
 .game-over-distance b{color:#b27c4d;font-family:Georgia,serif;font-size:clamp(34px,9vw,48px);letter-spacing:-.04em;line-height:1}
+.game-over-record{margin:-7px 0 20px;color:#6b8178;font-size:11px;font-weight:800;letter-spacing:.07em}
+.game-over-record.is-record{width:fit-content;margin:-7px auto 20px;padding:8px 12px;border-radius:9px;background:#f7df9d;color:#78551e}
 .play-again-btn{width:100%;min-height:54px;padding:0 20px;border:0;border-radius:18px;background:#417b70;color:#fff8e9;font-size:16px;font-weight:800;box-shadow:0 4px 0 #2e5e56;display:flex;align-items:center;justify-content:center;gap:9px}
 .play-again-btn span{font-size:23px;line-height:1}
 .play-again-btn:active{transform:translateY(2px);box-shadow:0 2px 0 #2e5e56}
@@ -62,7 +67,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}
     <div class="board-hud" aria-label="Marbles, depth, and the current switch objective">
       <span class="marbles"><span aria-hidden="true">●</span> <b id="ballCount">32</b></span>
       <span class="goal-line" id="goalText" aria-live="polite">♬ 0/2 bells · gate +10 ●</span>
-      <span class="depth">↓ <b id="depthCount">0</b>m <span class="gate-tally" id="zoneSymbol" aria-label="Jelly Orchard">❀</span></span>
+      <span class="depth" id="distanceReadout">↓ <b id="depthCount">0</b>m <span class="gate-tally" id="zoneSymbol" aria-label="Jelly Orchard">❀</span> <span class="distance-record-badge" id="distanceRecordBadge" role="status" hidden>NEW BEST</span></span>
     </div>
     <div class="board-controls">
       <button type="button" class="icon-btn" id="pauseBtn" aria-label="Pause game">Ⅱ</button>
@@ -78,6 +83,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}
         <p class="game-over-kicker">RUN ENDED</p>
         <h1 id="gameOverTitle">Out of marbles</h1>
         <p class="game-over-distance"><b id="finalDistance">0</b><span>meters travelled</span></p>
+        <p class="game-over-record" id="finalRecord">BEST DISTANCE · 0m</p>
         <button type="button" class="play-again-btn" id="playAgainBtn">Play again <span aria-hidden="true">↻</span></button>
       </div>
     </section>
@@ -124,7 +130,7 @@ const CAT_TYPES=[
 ];
 function createRunState(){
  return {
-  paused:false,ended:false,reserve:32,shots:0,score:0,bestChain:0,chain:0,chainTime:-100,
+  paused:false,ended:false,newDistanceRecord:false,recordFlairUntil:0,reserve:32,shots:0,score:0,bestChain:0,chain:0,chainTime:-100,
   phase:0,worldTime:0,frame:0,active:[],tiles:[],grid:Array.from({length:ROWS},()=>Array(COLS).fill(null)),
   particles:[],events:[],nextBallId:1,nextTileId:1,aimX:300,aimY:530,aimAngle:0,
   pointerDown:false,pointerFired:false,holdTime:0,keyboardFire:false,shootCooldown:0,shootRepeat:.18,
@@ -135,9 +141,33 @@ function createRunState(){
   gates:[],gatesPassed:0,pushes:0,rewardedChainGate:-1,courseSeed:0,mergeFX:[],catsFreed:0,gateAwards:[],catActions:0
  };
 }
-const state={...createRunState(),started:false,soundEnabled:true,musicEnabled:false,catCollection:new Set()};
+const state={...createRunState(),started:false,soundEnabled:true,musicEnabled:false,catCollection:new Set(),bestDistance:0};
 function readSaved(key,fallback=null){try{const current=`purrchinko.${key}`;let value=localStorage.getItem(current);if(value!==null)return value;value=localStorage.getItem(`purrpetual.${key}`);if(value!==null)localStorage.setItem(current,value);return value??fallback;}catch(e){return fallback;}}
-function writeSaved(key,value){try{localStorage.setItem(`purrchinko.${key}`,value);}catch(e){}}
+function writeSaved(key,value){try{localStorage.setItem(`purrchinko.${key}`,value);return true;}catch(e){return false;}}
+function readBestDistance(){
+ const value=Number(readSaved('bestDistance','0'));
+ return Number.isFinite(value)&&value>0?Math.floor(value):0;
+}
+let savedBestDistance=readBestDistance();state.bestDistance=savedBestDistance;
+function updateDistanceUI(){
+ const distance=Math.floor(state.cameraY/10);
+ if(distance>state.bestDistance){
+  if(!state.newDistanceRecord)state.recordFlairUntil=state.worldTime+4;
+  state.bestDistance=distance;state.newDistanceRecord=true;
+ }
+ else if(distance<state.bestDistance)state.newDistanceRecord=false;
+ const showFlair=state.newDistanceRecord&&state.worldTime<state.recordFlairUntil;
+ setText('depthCount',distance);
+ $('distanceReadout').classList.toggle('is-record',showFlair);
+ $('distanceRecordBadge').hidden=!showFlair;
+}
+function persistBestDistance(){
+ // Save with run checkpoints, rather than writing storage on every scrolling frame.
+ if(state.bestDistance>savedBestDistance){
+  state.bestDistance=Math.max(state.bestDistance,readBestDistance());updateDistanceUI();
+  if(writeSaved('bestDistance',String(state.bestDistance)))savedBestDistance=state.bestDistance;
+ }
+}
 try{state.catCollection=new Set(JSON.parse(readSaved('cats','[]')).filter(i=>Number.isInteger(i)&&i>=0&&i<CAT_TYPES.length));}catch(e){}
 let phys=null;
 const M=window.Matter||null;
@@ -572,7 +602,7 @@ function updateCourse(dt){
  updateBoss(dt);const old=state.cameraY;state.cameraY=Math.min(state.cameraTarget,state.cameraY+dt*410);
  if(state.cameraY!==old){
   state.aimY+=state.cameraY-old;
-  setText('depthCount',Math.floor(state.cameraY/10));
+  updateDistanceUI();
   // Recalled marbles travel with the launcher instead of teleporting into obstacles.
   for(const b of state.active)if(!b.dead&&b.y<state.cameraY+95){removeBall(b);}
   for(const t of state.tiles)if(!t.removed&&tilePos(t).y<state.cameraY+60)destroyTile(t);
@@ -633,9 +663,10 @@ function clear(){
  $('gameOver').hidden=true;$('frame').classList.remove('is-ended');updateUI();$('pauseBtn').textContent='Ⅱ';$('pauseControls').hidden=true;$('pauseBtn').setAttribute('aria-label','Pause game');
 }
 let lastRunSaveTime=-Infinity;
-const RUN_TRANSIENT_KEYS=new Set(['grid','active','tiles','events','particles','mergeFX','catLinks','paused','pointerDown','pointerFired','keyboardFire','holdTime','soundEnabled','musicEnabled']);
+const RUN_TRANSIENT_KEYS=new Set(['grid','active','tiles','events','particles','mergeFX','catLinks','paused','pointerDown','pointerFired','keyboardFire','holdTime','soundEnabled','musicEnabled','bestDistance']);
 function saveRun(force=false){
  if(!state.started||(!force&&state.worldTime-lastRunSaveTime<RUN_SAVE_INTERVAL))return false;
+ updateDistanceUI();persistBestDistance();
  const savedState={};for(const [key,value] of Object.entries(state))if(!RUN_TRANSIENT_KEYS.has(key))savedState[key]=value;
  const snapshot={version:1,rows:ROWS,seed,state:savedState,tiles:state.tiles.filter(t=>!t.removed),active:state.active.filter(b=>!b.dead)};
  try{writeSaved('run',JSON.stringify(snapshot,(key,value)=>{if(key==='body'||key==='trail')return undefined;if(value instanceof Set)return{__purrchinkoSet:[...value]};return value;}));lastRunSaveTime=state.worldTime;return true;}catch(e){return false;}
@@ -652,7 +683,7 @@ function restoreRun(){
   for(const b of state.active){b.body=null;b.dead=false;b.held=false;b.trail??=[];b.lastContacts??={};phys.addBall(b);}
   if(state.ended){$('pauseBtn').innerHTML='↺';$('pauseBtn').setAttribute('aria-label','Play again');showGameOver();}
   else{$('pauseBtn').textContent='Ⅱ';$('pauseBtn').setAttribute('aria-label','Pause game');}
-  $('pauseControls').hidden=true;updateUI();lastRunSaveTime=state.worldTime;return true;
+  $('pauseControls').hidden=true;updateUI();persistBestDistance();lastRunSaveTime=state.worldTime;return true;
  }catch(e){try{localStorage.removeItem('purrchinko.run');}catch{}return false;}
 }
 function addBall(x,y,vx,vy,options={}){if(state.active.length>96)return null;const b={id:state.nextBallId++,x,y,vx,vy,r:7.25,color:options.color||pick(MARBLE_COLORS),age:0,trail:[],dead:false,held:false,lastContacts:{}};state.active.push(b);phys.addBall(b);return b;}
@@ -681,7 +712,7 @@ function createShot(){
 function updateUI(){
  state.reserve=clamp(state.reserve,0,160);
  const boosting=state.worldTime<state.boostUntil||state.finalWaveActive||state.showerActive;
- setText('depthCount',Math.floor(state.cameraY/10));setText('zoneSymbol',currentZone().symbol);$('zoneSymbol').setAttribute('aria-label',currentZone().name);
+ updateDistanceUI();setText('zoneSymbol',currentZone().symbol);$('zoneSymbol').setAttribute('aria-label',currentZone().name);
  const gate=state.gates[state.gatesPassed],done=gate?gate.bolts.filter((v,i)=>gate.maxBolts[i]>0&&v===0).length:0,need=gate?gate.maxBolts.filter(v=>v>0).length:0,goal=$('goalText');
  if(goal){
   if(state.finalWaveUsed&&state.reserve===0)setText('goalText','LAST MARBLE SHOWER');
@@ -985,6 +1016,9 @@ function startFinalWave(){
  sparkle(300,state.cameraY+93,'#f3d381',52,1.35);sound('boost');updateUI();
 }
 function showGameOver(){
+ updateDistanceUI();persistBestDistance();
+ setText('finalRecord',state.newDistanceRecord?'NEW DISTANCE RECORD':`BEST DISTANCE · ${state.bestDistance.toLocaleString('en-US')}m`);
+ $('finalRecord').classList.toggle('is-record',state.newDistanceRecord);
  $('finalDistance').textContent=Math.floor(state.cameraY/10).toLocaleString('en-US');
  $('gameOver').hidden=false;$('frame').classList.add('is-ended');
  $('playAgainBtn').focus({preventScroll:true});
@@ -1356,7 +1390,9 @@ function stepSimulation(dt){
   if(state.holdTime>.26&&state.shootCooldown<=0&&createShot())state.pointerFired=true;
  }
  if(state.keyboardFire&&state.shootCooldown<=0)createShot();
- prePhysics(dt);phys.step(dt);updateContraptions(dt);postPhysics(dt);saveRun();
+ prePhysics(dt);phys.step(dt);updateContraptions(dt);postPhysics(dt);
+ if(state.recordFlairUntil>0&&state.worldTime>=state.recordFlairUntil){state.recordFlairUntil=0;updateDistanceUI();}
+ saveRun();
 }
 let previous=performance.now(),acc=0;
 function loop(now){

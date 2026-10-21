@@ -152,6 +152,88 @@ test('shared simulation steps drive held input and the final ordinary-marble wav
   assert.ok(game.state.active.every(ball => ball.r === 7.25 && !('kind' in ball)));
 });
 
+test('distance records persist across restarts and reloads without treating ties as records', () => {
+  const run = loadGame(new Map([['purrchinko.bestDistance', '52']]));
+  const {game, elements, saved} = run;
+  assert.equal(game.state.bestDistance, 52);
+  assert.equal('bestDistance' in elements, false);
+  assert.equal(elements.distanceRecordBadge.hidden, true);
+  Object.assign(game.state, {cameraY: 520, cameraTarget: 520});
+  game.saveRun(true);
+  assert.equal(game.state.newDistanceRecord, false);
+  Object.assign(game.state, {cameraY: 530, cameraTarget: 530});
+  game.saveRun(true);
+  assert.equal(game.state.newDistanceRecord, true);
+  assert.equal(elements.distanceRecordBadge.hidden, false);
+  assert.equal(saved.get('purrchinko.bestDistance'), '53');
+  const reloaded = loadGame(saved);
+  assert.equal(reloaded.game.state.bestDistance, 53);
+  assert.equal(reloaded.game.state.newDistanceRecord, true);
+  assert.equal(reloaded.elements.distanceRecordBadge.hidden, false);
+  reloaded.game.reset();
+  assert.equal(reloaded.game.state.bestDistance, 53);
+  assert.equal(reloaded.game.state.newDistanceRecord, false);
+  assert.equal(reloaded.elements.distanceRecordBadge.hidden, true);
+  Object.assign(reloaded.game.state, {cameraY: 500, cameraTarget: 500, score: 999999});
+  reloaded.game.saveRun(true);
+  assert.equal(saved.get('purrchinko.bestDistance'), '53');
+  assert.equal(reloaded.game.state.newDistanceRecord, false);
+});
+
+test('record highlights update while scrolling and the end summary survives reload', () => {
+  const run = loadGame(new Map([['purrchinko.bestDistance', '1']]));
+  run.game.state.cameraTarget = 40;
+  run.game.step(6);
+  assert.ok(run.game.state.bestDistance > 1);
+  assert.equal(run.elements.distanceRecordBadge.hidden, false);
+  run.game.state.ended = true;
+  run.game.saveRun(true);
+  const restored = loadGame(run.saved);
+  assert.equal(restored.elements.finalRecord.textContent, 'NEW DISTANCE RECORD');
+  assert.equal(restored.elements.gameOver.hidden, false);
+  restored.game.reset();
+  restored.game.state.ended = true;
+  restored.game.saveRun(true);
+  assert.match(loadGame(restored.saved).elements.finalRecord.textContent, /^BEST DISTANCE/);
+});
+
+test('record flair expires once per run while the best distance stays saved', () => {
+  const {game, elements, saved} = loadGame(new Map([['purrchinko.bestDistance', '10']]));
+  Object.assign(game.state, {cameraY: 110, cameraTarget: 110});
+  game.saveRun(true);
+  assert.equal(elements.distanceRecordBadge.hidden, false);
+  game.state.worldTime += 5;
+  game.step();
+  assert.equal(elements.distanceRecordBadge.hidden, true);
+  assert.equal(game.state.newDistanceRecord, true);
+  Object.assign(game.state, {cameraY: 120, cameraTarget: 120});
+  game.saveRun(true);
+  assert.equal(elements.distanceRecordBadge.hidden, true);
+  assert.equal(saved.get('purrchinko.bestDistance'), '12');
+});
+
+test('invalid stored records recover and existing saved runs seed the distance record', () => {
+  for (const invalid of ['NaN', 'Infinity', '-20', '{}']) {
+    assert.equal(loadGame(new Map([['purrchinko.bestDistance', invalid]])).game.state.bestDistance, 0);
+  }
+  const old = loadGame();
+  Object.assign(old.game.state, {cameraY: 810, cameraTarget: 810});
+  old.game.saveRun(true);
+  old.saved.delete('purrchinko.bestDistance');
+  const snapshot = JSON.parse(old.saved.get('purrchinko.run'));
+  delete snapshot.state.newDistanceRecord;
+  snapshot.state.bestDistance = 1; // A run snapshot cannot overwrite the separate record.
+  old.saved.set('purrchinko.run', JSON.stringify(snapshot));
+  const migrated = loadGame(old.saved);
+  assert.equal(migrated.game.state.bestDistance, 81);
+  assert.equal(old.saved.get('purrchinko.bestDistance'), '81');
+  old.saved.set('purrchinko.bestDistance', '100');
+  const higher = loadGame(old.saved);
+  assert.equal(higher.game.state.bestDistance, 100);
+  assert.equal(higher.game.state.newDistanceRecord, false);
+  assert.equal(higher.elements.distanceRecordBadge.hidden, true);
+});
+
 test('gate audio retains the full latch and chime when ordinary effects are saturated', () => {
   const nodes = [];
   const param = () => ({setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {}});
