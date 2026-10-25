@@ -8,6 +8,7 @@ const $=id=>elements[id]??(elements[id]=document.getElementById(id));
 function setText(id,value){const el=$(id),text=String(value);if(el.textContent!==text)el.textContent=text;}
 const canvas = $('game'), ctx = canvas.getContext('2d', {alpha:false});
 const W=600, COLS=9, CX=60, CY=137, SX=60, SY=52;
+const MAX_CANVAS_PIXELS=3200000;
 let H=900;
 const BOOST_DURATION=3.8,BOOST_COOLDOWN=18,BOOST_SHOT_RATE=.095;
 const FINAL_WAVE_SHOTS=84,FINAL_WAVE_SHOT_RATE=.052,FINAL_WAVE_ANGLE=.61;
@@ -409,7 +410,7 @@ function updateContraptions(dt){
   k.nowX=time<(k.disabledUntil||0)?(k.frozenX||k.x):k.x+(k.kind==='shutter'?Math.sin(time*1.2+k.phase)*k.amp:k.kind==='pendulum'?Math.sin(time*1.5+k.phase)*k.amp:0);
   k.nowY=k.y+(k.kind==='pendulum'?Math.cos(time*1.5+k.phase)*13:0);
   k.kick=Math.max(0,k.kick-dt*3);
-  if(k.nowY<state.cameraY+105||k.nowY>state.cameraY+820||state.worldTime<(k.disabledUntil||0))continue;
+  if(k.nowY<state.cameraY+105||k.nowY>state.cameraY+H-80||state.worldTime<(k.disabledUntil||0))continue;
   for(const b of state.active){if(b.dead||b.held)continue;
    const contactX=k.kind==='shutter'?clamp(b.x,k.nowX-52,k.nowX+52):k.nowX;
    const dx=b.x-contactX,dy=b.y-k.nowY,d=Math.hypot(dx,dy)||1,overlap=b.r+(k.kind==='shutter'?11:k.radius)-d;
@@ -423,7 +424,7 @@ function updateContraptions(dt){
   }
  }
  for(const peg of state.starPegs){const gate=state.gates[peg.room];if(!gate||gate.opened||peg.lit)continue;
-  if(peg.y<state.cameraY+110||peg.y>state.cameraY+805)continue;
+  if(peg.y<state.cameraY+110||peg.y>state.cameraY+H-95)continue;
   for(const b of state.active){if(b.dead||b.held)continue;
    const dx=b.x-peg.x,dy=b.y-peg.y,d=Math.hypot(dx,dy)||1;
    if(d>b.r+peg.r)continue;
@@ -970,12 +971,23 @@ document.addEventListener('visibilitychange',()=>{
  if(document.hidden){if(state.started&&!state.paused&&!state.ended)togglePause();if(audio?.state==='running')audio.suspend().catch(()=>{});}
 });
 window.addEventListener('beforeunload',()=>saveRun(true));
+let viewportWidth=0,viewportHeight=0,viewportPixelRatio=0;
 function resize(){
- const dpr=Math.min(window.devicePixelRatio||1,2),rect=$('frame').getBoundingClientRect();
- H=Math.max(1,rect.height*W/rect.width);specks=makeSpecks();backgroundPhase=-1;
- canvas.width=Math.round(W*dpr);canvas.height=Math.round(H*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);
+ const rect=$('frame').getBoundingClientRect(),pixelRatio=Math.min(window.devicePixelRatio||1,3);
+ if(rect.width<=0||rect.height<=0)return;
+ if(rect.width===viewportWidth&&rect.height===viewportHeight&&pixelRatio===viewportPixelRatio)return;
+ viewportWidth=rect.width;viewportHeight=rect.height;viewportPixelRatio=pixelRatio;
+ H=rect.height*W/rect.width;specks=makeSpecks();backgroundPhase=-1;
+ // Match the displayed size on Retina screens without oversized tablet buffers.
+ const scale=Math.min(rect.width/W*pixelRatio,Math.sqrt(MAX_CANVAS_PIXELS/(W*H)));
+ canvas.width=Math.max(1,Math.floor(W*scale));canvas.height=Math.max(1,Math.floor(H*scale));
+ ctx.setTransform(canvas.width/W,0,0,canvas.height/H,0,0);
+ // Rotating or resizing during a hold must not leave the launcher firing.
+ state.pointerDown=false;state.keyboardFire=false;
 }
-window.addEventListener('resize',resize);resize();
+window.addEventListener('resize',resize);
+if(window.ResizeObserver)new window.ResizeObserver(resize).observe($('frame'));
+resize();
 /* --- Vector art toolkit -------------------------------------------------- */
 function catFace(x,y,scale=1,color='#2d4646',eyes='#f5e2b9',smile=true){ctx.save();ctx.translate(x,y);ctx.scale(scale,scale);ctx.fillStyle=color;ctx.strokeStyle=color;polygon([[-20,-4],[-18,-21],[-8,-13],[5,-15],[15,-23],[22,-3],[19,15],[7,22],[-11,21],[-21,11]]);ctx.fill();ctx.lineWidth=1.7;ctx.stroke();ctx.fillStyle=eyes;ellipse(-8,2,3,4);ctx.fill();ellipse(9,2,3,4);ctx.fill();ctx.fillStyle=color===eyes?'#b77562':'#cf9c7b';polygon([[-3,9],[4,9],[0,13]]);ctx.fill();if(smile){ctx.strokeStyle=eyes;ctx.lineWidth=1.35;ctx.beginPath();ctx.moveTo(0,12);ctx.quadraticCurveTo(-6,18,-10,13);ctx.moveTo(0,12);ctx.quadraticCurveTo(6,18,9,13);ctx.stroke();}ctx.restore();}
 function drawBg(){

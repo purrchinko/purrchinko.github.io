@@ -63,7 +63,54 @@ test('startup, cached rendering, themes, and resizing work without retired UI', 
   elements.frame.getBoundingClientRect = () => ({width: 390, height: 844});
   handlers.get('resize')();
   env.nextFrame(performance.now());
-  assert.equal(elements.game.height, Math.round(844 * 600 / 390));
+  assert.equal(elements.game.width, 390);
+  assert.equal(elements.game.height, 844);
+});
+
+test('Retina rendering follows the displayed size, caps tablet pixels, and cancels a rotated hold', () => {
+  const {game, env, elements, handlers} = loadGame();
+  env.devicePixelRatio = 3;
+  elements.frame.getBoundingClientRect = () => ({width: 900, height: 1366});
+  game.state.pointerDown = true;
+  game.state.keyboardFire = true;
+  handlers.get('resize')();
+  assert.ok(elements.game.width > 1200);
+  assert.ok(elements.game.width * elements.game.height <= 3200000);
+  assert.ok(Math.abs(elements.game.width / elements.game.height - 900 / 1366) < .001);
+  assert.equal(game.state.pointerDown, false);
+  assert.equal(game.state.keyboardFire, false);
+  game.state.pointerDown = true;
+  handlers.get('resize')();
+  assert.equal(game.state.pointerDown, true); // A duplicate observer notification must not cancel input.
+  const width = elements.game.width;
+  elements.frame.getBoundingClientRect = () => ({width: 0, height: 0});
+  handlers.get('resize')();
+  assert.equal(elements.game.width, width);
+});
+
+test('visible bumpers and skill pegs remain interactive on tall phone screens', () => {
+  const {game, elements, handlers} = loadGame();
+  elements.frame.getBoundingClientRect = () => ({width: 390, height: 844});
+  handlers.get('resize')();
+  game.createShot();
+  const ball = game.state.active[0];
+  const bumper = {room: 0, x: 300, y: 1050, nowX: 300, nowY: 1050, kind: 'bumper', radius: 22, phase: 0, amp: 0, kick: 0, hitTime: -99};
+  game.state.kickers = [bumper];game.state.starPegs = [];
+  Object.assign(ball, {x: 300, y: 1040, vx: 0, vy: 200});
+  game.updateContraptions(1 / 60);
+  assert.ok(ball.vy < 0);
+  assert.equal(bumper.kick, 1);
+  const peg = {room: 0, x: 300, y: 1120, r: 10, lit: false, hitTime: -99, spin: 0};
+  game.state.kickers = [];game.state.starPegs = [peg];
+  Object.assign(ball, {x: 300, y: 1110, vx: 0, vy: 200});
+  game.updateContraptions(1 / 60);
+  assert.equal(peg.lit, true);
+  // The same objects stay inactive below the bottom of a shorter landscape board.
+  elements.frame.getBoundingClientRect = () => ({width: 350, height: 390});
+  handlers.get('resize')();
+  peg.lit = false;Object.assign(ball, {x: 300, y: 1110, vx: 0, vy: 200});
+  game.updateContraptions(1 / 60);
+  assert.equal(peg.lit, false);
 });
 
 test('bells open ordinary and boss gates once and retire passed contraptions', () => {

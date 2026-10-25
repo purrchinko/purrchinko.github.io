@@ -17,7 +17,7 @@ Purrchinko is an endless, portrait-first marble puzzle. It should feel like a ha
 
 ## Feel and presentation
 
-The board is vector-drawn at 600×900 and scales to a mobile portrait viewport. A restrained HUD shows the reserve, current bell progress, and distance. The first frame opens directly on the board, and gameplay events do not interrupt it with message popups.
+The board is vector-drawn at a logical width of 600, with its height following the available screen space. The responsive layout supports iPhone and tablet sizes in portrait, landscape, and split view; safe-area insets keep controls clear of notches and home indicators. Tablet boards grow up to 900 CSS pixels wide, and Retina rendering follows the displayed size within a 3.2-million-pixel budget. A restrained HUD shows the reserve, current bell progress, and distance. The first frame opens directly on the board, and gameplay events do not interrupt it with message popups.
 
 Impacts, block pushes, merges, returns, gates, and cat actions have distinct synthesized sounds. Merge and gate rewards should feel clear and warm without filling the screen with counters or inventory controls. The pause panel contains sound and restart controls.
 
