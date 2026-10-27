@@ -75,3 +75,17 @@ The game launches one ordinary marble type throughout the run. Scheduled project
 ## Cat rescue surge and quiet board
 
 A real mobile-sized browser playtest hit the first cat cage and showed the infinite reserve, auto-firing ordinary marbles, and a countdown ring around the launcher cat. The live reserve remained available during the burst, then returned to its normal count after the surge. No message banner appeared over the board.
+
+## Second rescued-cat interaction and audio pass
+
+- Miso block matches create a bounded impulse ring that moves nearby ordinary marbles; failed pickups avoid repeating the same target immediately, and carried blocks are preserved when a destination refills or the cat travels to the next room.
+- Pepper deliveries temporarily magnetize the receiving nest; Sunny's machine winding creates an immediate radial marble kick in addition to powering the mechanism. These actions do not generate extra marbles.
+- Cats recalculate landing positions after midair board changes and can find alternate room perches instead of intersecting occupied tiles. Marble anti-stall monitoring detects both stillness and short repeating loops and supplies finite impulses and within-chamber escape positions.
+- Individual cat-action sounds now have distinct pitch/envelope recipes, with a quiet filtered slapback and softened musical accents. Music has subtle syncopated responses, while gate sounds keep reserved polyphony.
+- Automated regression coverage extends to multi-room rescues, autonomous deliveries and winding, mid-jump saves, landing obstruction, cargo preservation, marble recovery, nested attraction, radial impulse behavior, and the offline standalone export. Human mobile playtesting is still needed for final sound levels and difficulty feel.
+
+## Third rescued-cat density pass
+
+- Only the freed cat native to the current room can be active. Earlier rescued cats retire as the gate opens, and new rooms retain their own distinct rescue; collection unlocks and total rescues are preserved.
+- A retired Pepper's unspent stored marbles return to reserve. Miso's undelivered block goes back into an open cell of its original room, or becomes one reserve marble if no cell remains. Older saves containing traveling rescued cats are normalized when loaded.
+- Freed-cat drawings are scaled to 84% with proportional collision footprints and slightly tighter tap bounds. Cages remain full size and easy to strike. Gameplay regression coverage: 32 passing tests.

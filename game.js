@@ -11,6 +11,7 @@ const W=600, COLS=9, CX=60, CY=137, SX=60, SY=52;
 const MAX_CANVAS_PIXELS=3200000;
 let H=900;
 const BOOST_DURATION=3.8,BOOST_COOLDOWN=18,BOOST_SHOT_RATE=.095;
+const FREED_CAT_SCALE=.84;
 const FINAL_WAVE_SHOTS=84,FINAL_WAVE_SHOT_RATE=.052,FINAL_WAVE_ANGLE=.61;
 const SHOWER_SHOTS=30,SHOWER_SHOT_RATE=.072,SHOWER_MIN_GAP=850,SHOWER_MAX_GAP=1150;
 const RUN_SAVE_INTERVAL=.75,EMPTY_BOARD_DELAY=.7,FINAL_END_DELAY=1.4,TIMED_RESCUE_DELAY=9;
@@ -121,6 +122,12 @@ function initAudio(){
    mix=audio.createGain();mix.gain.value=.9;mix.connect(compressor);compressor.connect(audio.destination);
    effectsBus=audio.createGain();effectsBus.gain.value=state.soundEnabled?1:0;effectsBus.connect(mix);
    musicBus=audio.createGain();musicBus.gain.value=state.musicEnabled ? .58 : 0;musicBus.connect(mix);
+   // Quiet, filtered slapback adds warm toy-room space without sound assets.
+   if(audio.createDelay){const delay=audio.createDelay(.4),feedback=audio.createGain(),damp=audio.createBiquadFilter(),wet=audio.createGain();
+    delay.delayTime.value=.155;feedback.gain.value=.13;damp.type='lowpass';damp.frequency.value=1900;wet.gain.value=.11;
+    effectsBus.connect(delay);delay.connect(damp);damp.connect(wet);wet.connect(mix);
+    damp.connect(feedback);feedback.connect(delay);
+   }
    noiseBuffer=audio.createBuffer(1,Math.ceil(audio.sampleRate*.3),audio.sampleRate);
    const data=noiseBuffer.getChannelData(0);for(let i=0;i<data.length;i++)data[i]=Math.random()*2-1;
   }
@@ -145,6 +152,10 @@ function scheduleMusic(){
   if(beat===0)chord.forEach((freq,i)=>musicTone(freq,musicNextAt,3.3,i===0?.015:.011,{type:'sine',cutoff:920+i*110,attack:.48}));
   musicTone(chord[arp[beat]]*2,musicNextAt,.57,beat===0||beat===4?.024:.018,{type:'sine',cutoff:2100,attack:.018});
   if(beat===0||beat===4)musicTone(chord[(arp[beat]+2)%chord.length]*4,musicNextAt,.78,.006,{type:'triangle',cutoff:2800,attack:.035});
+  // Tiny offbeat kalimba answers keep the gentle loop alive without drums.
+  if(beat===2||beat===6)musicTone(chord[arp[(beat+2)%8]]*3,musicNextAt+.09,.29,.007,{type:'triangle',cutoff:2650,attack:.012});
+  if(beat===7&&bar%2===1)musicTone(chord[0],musicNextAt+.08,.36,.007,{type:'triangle',cutoff:1000,attack:.025});
+  if(beat===3&&state.chain>=12)musicTone(chord[2]*4,musicNextAt+.11,.38,.007,{type:'sine',cutoff:3200,attack:.02});
   musicNextAt+=MUSIC_STEP;
  }
 }
@@ -158,15 +169,16 @@ function stopMusic(){
  if(audio)for(const osc of musicVoices){try{osc.stop(audio.currentTime+.02);}catch(e){}}
  if(musicBus&&audio){musicBus.gain.cancelScheduledValues(audio.currentTime);musicBus.gain.setTargetAtTime(0,audio.currentTime,.035);}
 }
-function tone(freq,dur,vol,{delay=0,end=freq,type='sine',pan=0,noise=false,cutoff=1600,vibrato=0,priority=false}={}){
+function tone(freq,dur,vol,{delay=0,end=freq,type='sine',pan=0,noise=false,cutoff=2500,vibrato=0,priority=false}={}){
  // Keep the full gate cue available even during a busy collision burst.
  if(voices>=EFFECT_VOICE_LIMIT+(priority?GATE_VOICE_RESERVE:0))return;
  const t=audio.currentTime+delay,source=noise?audio.createBufferSource():audio.createOscillator();
  const gain=audio.createGain(),filter=audio.createBiquadFilter();let wobble=null,depth=null;
  if(noise){source.buffer=noiseBuffer;filter.type='bandpass';filter.frequency.value=cutoff;filter.Q.value=.8;}
- else{source.type=type;source.frequency.setValueAtTime(freq,t);source.frequency.exponentialRampToValueAtTime(Math.max(25,end),t+dur);filter.type='lowpass';filter.frequency.value=7500;}
+ else{source.type=type;source.frequency.setValueAtTime(Math.max(25,freq),t);source.frequency.exponentialRampToValueAtTime(Math.max(25,end),t+dur);filter.type='lowpass';filter.frequency.value=cutoff;filter.Q.value=.45;}
  if(vibrato&&!noise){wobble=audio.createOscillator();depth=audio.createGain();wobble.frequency.value=17;depth.gain.setValueAtTime(freq*vibrato,t);depth.gain.linearRampToValueAtTime(0,t+dur);wobble.connect(depth);depth.connect(source.frequency);wobble.start(t);wobble.stop(t+dur+.015);}
- gain.gain.setValueAtTime(.0001,t);gain.gain.linearRampToValueAtTime(Math.max(.0002,vol),t+.003);
+ gain.gain.setValueAtTime(.0001,t);gain.gain.linearRampToValueAtTime(Math.max(.0002,vol),t+Math.min(.008,dur*.16));
+ gain.gain.setValueAtTime(Math.max(.0002,vol)*.72,t+dur*.37);
  gain.gain.exponentialRampToValueAtTime(.0001,t+dur);
  source.connect(filter);filter.connect(gain);
  const position=audio.createStereoPanner?.();if(position){position.pan.value=clamp(pan,-.7,.7);gain.connect(position);position.connect(effectsBus||mix);}else gain.connect(effectsBus||mix);
@@ -174,13 +186,13 @@ function tone(freq,dur,vol,{delay=0,end=freq,type='sine',pan=0,noise=false,cutof
  source.start(t);source.stop(t+dur+.015);
 }
 function mallet(freq,dur,vol,pan=0,delay=0,bright=false,{priority=false}={}){
- tone(freq,dur,vol,{pan,delay,priority});
- tone(freq*(bright?2.76:2),dur*.4,vol*.27,{pan,delay,priority});
- tone(freq*(bright?5.4:3),dur*.19,vol*.11,{pan,delay,priority});
+ tone(freq,dur,vol,{pan,delay,priority,cutoff:bright?4400:2400});
+ tone(freq*(bright?2.76:2),dur*.4,vol*.27,{pan,delay,priority,cutoff:bright?5800:3400});
+ tone(freq*(bright?5.4:3),dur*.19,vol*.11,{pan,delay,priority,cutoff:6200});
 }
 function sound(event,{x=300,family='rose',tier=0,energy=1}={}){
  if(!state.soundEnabled||!audio||audio.state!=='running')return;
- const now=audio.currentTime,interval={hit:.045,push:.075,shot:.055,capture:.07,merge:.085}[event]||.1;
+ const now=audio.currentTime,interval={hit:.045,push:.075,shot:.055,capture:.07,merge:.085,swat:.11,fetch:.16,drop:.18,catch:.12,deposit:.2,wind:.25,hop:.13,land:.11,unstick:.5}[event]||.1;
  if(now-(soundTimes.get(event)??-99)<interval)return;soundTimes.set(event,now);
  const pan=(x/W-.5)*1.3,index=Math.max(0,FAMILY_COLORS.indexOf(family));
  const note=NOTES[(index+Math.min(3,Math.floor(state.chain/10)))%NOTES.length];
@@ -213,13 +225,39 @@ function sound(event,{x=300,family='rose',tier=0,energy=1}={}){
    [523.25,659.25,783.99,1046.5].forEach((freq,i)=>mallet(freq,.38-i*.025,.085,pan,.08+i*.072,true,{priority:true}));
    mallet(1318.5,.52,.06,pan,.39,true,{priority:true});break;
   case 'purr':
-   for(let i=0;i<8;i++)tone(72+i%2*12,.09,.045,{delay:i*.055,end:48,type:'triangle'});
-   [1,1.25,1.5].forEach((r,i)=>mallet(523.25*r,.55,.025,0,.18+i*.1));break;
+   for(let i=0;i<4;i++)tone(82+i%2*11,.12,.029,{delay:i*.072,end:58,type:'triangle',pan,cutoff:650});
+   [1,1.25].forEach((r,i)=>mallet(440*r,.4,.022,pan,.13+i*.095));break;
   case 'boost':
    [1,1.25,1.5,2,2.5].forEach((r,i)=>mallet(392*r,.42,.04,pan,i*.045,true));
    for(let i=0;i<5;i++)tone(84+i%2*9,.11,.025,{delay:i*.04,end:58,type:'triangle'});break;
   case 'cat':
    tone(420,.28,.07,{end:780,pan,vibrato:.08});tone(630,.22,.035,{delay:.13,end:390,pan});break;
+  case 'swat':
+   tone(255,.16,.052,{end:720,type:'triangle',pan,cutoff:4200});
+   tone(0,.055,.024,{noise:true,cutoff:2100,pan});mallet(740,.18,.025,pan,.05,true);break;
+  case 'fetch':
+   tone(280,.11,.058,{end:165,type:'triangle',pan});tone(0,.055,.026,{noise:true,cutoff:1080,pan});
+   mallet(392,.18,.028,pan,.04);break;
+  case 'drop':
+   tone(125,.18,.085,{end:66,type:'triangle',pan});tone(0,.075,.038,{noise:true,cutoff:980,pan});
+   [392,493.88,587.33].forEach((freq,i)=>mallet(freq,.32,.032,pan,i*.075,true));break;
+  case 'catch':
+   tone(610,.18,.052,{end:205,pan,cutoff:2200});tone(300,.13,.035,{end:520,pan,delay:.035});break;
+  case 'deposit':
+   tone(160,.16,.05,{end:88,type:'triangle',pan});
+   [440,554.37,659.25,880].forEach((freq,i)=>mallet(freq,.25,.035,pan,i*.07,true));break;
+  case 'wind':
+   for(let i=0;i<4;i++){tone(0,.032,.025,{noise:true,cutoff:1500+i*500,pan,delay:i*.048});
+    tone(250+i*95,.07,.032,{end:315+i*110,type:'triangle',pan,delay:i*.048});}
+   mallet(880,.28,.042,pan,.24,true);break;
+  case 'hop':
+   tone(240,.24,.056,{end:680,type:'triangle',pan,vibrato:.03});
+   tone(0,.07,.018,{noise:true,cutoff:900,pan});break;
+  case 'land':
+   tone(120,.12,.078,{end:66,type:'triangle',pan});
+   tone(0,.06,.024,{noise:true,cutoff:680,pan});mallet(523.25,.18,.018,pan,.045);break;
+  case 'unstick':
+   tone(175,.2,.032,{end:500,type:'triangle',pan});mallet(660,.16,.024,pan,.065);break;
   case 'break':tone(0,.14,.1,{noise:true,cutoff:1800,pan});[1,1.5,2].forEach((r,i)=>mallet(440*r,.22,.045,pan,i*.035));break;
   case 'hazard':tone(160,.18,.025,{end:80,type:'triangle',pan});tone(0,.08,.018,{noise:true,cutoff:500,pan});break;
  }
@@ -236,18 +274,19 @@ function sparkle(x,y,color,n=12,strength=1){for(let i=0;i<n;i++){const a=Math.ra
 class PhysicsWorld{
  constructor(){this.isMatter=!!M;if(M){this.engine=M.Engine.create({enableSleeping:false,positionIterations:7,velocityIterations:7,constraintIterations:3});this.engine.gravity.y=.73;this.engine.gravity.scale=.001;this.world=this.engine.world;this.boundaries=[];for(const [x,y,w,h] of [[9,550,18,760],[591,550,18,760],[300,92,540,12]]){const body=M.Bodies.rectangle(x,y,w,h,{isStatic:true,restitution:.85,friction:0,collisionFilter:{category:1}});M.Composite.add(this.world,body);this.boundaries.push(body);}M.Events.on(this.engine,'collisionStart',evt=>{for(const p of evt.pairs){const a=p.bodyA.plugin?.game,b=p.bodyB.plugin?.game;if(!a||!b)continue;if(a.type==='ball'&&b.type==='tile')state.events.push({tile:b.owner,ball:a.owner,nx:p.collision.normal.x,ny:p.collision.normal.y});else if(b.type==='ball'&&a.type==='tile')state.events.push({tile:a.owner,ball:b.owner,nx:-p.collision.normal.x,ny:-p.collision.normal.y});}});}}
  addBall(ball){if(M){const b=M.Bodies.circle(ball.x,ball.y,ball.r,{restitution:.87,friction:.001,frictionStatic:0,frictionAir:.0015,density:.0035,slop:.012,collisionFilter:{category:2}});b.plugin.game={type:'ball',owner:ball};M.Composite.add(this.world,b);ball.body=b;M.Body.setVelocity(b,{x:ball.vx/60,y:ball.vy/60});}}
- addTile(t){if(t.kind==='nest')return;if(M){const p=tilePos(t),scale=tileScale(t);let b;if(t.kind==='switch'||t.kind==='lever'){b=M.Bodies.circle(p.x,p.y,20,{isStatic:true,restitution:1.05,friction:0});}else if(t.kind==='boss'){b=M.Bodies.rectangle(p.x,p.y,101,92,{isStatic:true,restitution:.9,chamfer:{radius:18}});}else if(t.obstacle&&t.gateIndex!==null){b=M.Bodies.rectangle(p.x,p.y,60,44,{isStatic:true,restitution:.8});}else if(t.kind==='cat'){b=M.Bodies.rectangle(p.x,p.y,t.caged?101:64,t.caged?92:60,{isStatic:true,restitution:.93,chamfer:{radius:20}});}else if(t.kind==='rotor'){b=M.Bodies.rectangle(p.x,p.y,46*scale,8*scale,{isStatic:true,restitution:1.07,friction:0});}else if(['bubble','clock','magnet','cloud','yarn'].includes(t.kind)){b=M.Bodies.circle(p.x,p.y,22*scale,{isStatic:true,restitution:.93,friction:0});}else b=M.Bodies.rectangle(p.x,p.y,41*scale,40*scale,{isStatic:true,restitution: t.kind==='spring'?1.25:.8,friction:0,chamfer:{radius:9}});b.plugin.game={type:'tile',owner:t};M.Composite.add(this.world,b);t.body=b;}}
+ addTile(t){if(t.kind==='nest')return;if(M){const p=tilePos(t),scale=tileScale(t);let b;if(t.kind==='switch'||t.kind==='lever'){b=M.Bodies.circle(p.x,p.y,20,{isStatic:true,restitution:1.05,friction:0});}else if(t.kind==='boss'){b=M.Bodies.rectangle(p.x,p.y,101,92,{isStatic:true,restitution:.9,chamfer:{radius:18}});}else if(t.obstacle&&t.gateIndex!==null){b=M.Bodies.rectangle(p.x,p.y,60,44,{isStatic:true,restitution:.8});}else if(t.kind==='cat'){b=M.Bodies.rectangle(p.x,p.y,t.caged?101:54,t.caged?92:50,{isStatic:true,restitution:.93,chamfer:{radius:17}});}else if(t.kind==='rotor'||t.kind==='sun'){b=M.Bodies.rectangle(p.x,p.y,46*scale,8*scale,{isStatic:true,restitution:1.07,friction:0});}else if(['bubble','clock','magnet','cloud','yarn'].includes(t.kind)){b=M.Bodies.circle(p.x,p.y,22*scale,{isStatic:true,restitution:.93,friction:0});}else b=M.Bodies.rectangle(p.x,p.y,41*scale,40*scale,{isStatic:true,restitution: t.kind==='spring'?1.25:.8,friction:0,chamfer:{radius:9}});b.plugin.game={type:'tile',owner:t};M.Composite.add(this.world,b);t.body=b;}}
  removeBall(b){if(M&&b.body){M.Composite.remove(this.world,b.body);b.body=null;}}
+ moveBall(b,x,y){b.x=x;b.y=y;if(M&&b.body)M.Body.setPosition(b.body,{x,y});}
  removeTile(t){if(M&&t.body){M.Composite.remove(this.world,t.body);t.body=null;}}
  moveTile(t){if(M&&t.body){const p=tilePos(t);M.Body.setPosition(t.body,p);}}
- rotateTile(t){if(M&&t.body&&t.kind==='rotor')M.Body.setAngle(t.body,t.angle);}
+ rotateTile(t){if(M&&t.body&&(t.kind==='rotor'||t.kind==='sun'))M.Body.setAngle(t.body,t.angle);}
  applyAcceleration(ball,ax,ay,dt){if(M&&ball.body){const b=ball.body;M.Body.applyForce(b,b.position,{x:ax*b.mass*.000018,y:ay*b.mass*.000018});}else{ball.vx+=ax*dt;ball.vy+=ay*dt;}}
  setVel(ball,vx,vy){ball.vx=vx;ball.vy=vy;if(M&&ball.body)M.Body.setVelocity(ball.body,{x:vx/60,y:vy/60});}
  step(dt){if(M){this.engine.gravity.y=.73*gravity()/510;M.Body.setPosition(this.boundaries[0],{x:9,y:state.cameraY+550});M.Body.setPosition(this.boundaries[1],{x:591,y:state.cameraY+550});M.Body.setPosition(this.boundaries[2],{x:300,y:state.cameraY+92});M.Engine.update(this.engine,dt*1000);for(const ball of state.active){if(!ball.body)continue;ball.x=ball.body.position.x;ball.y=ball.body.position.y;ball.vx=ball.body.velocity.x*60;ball.vy=ball.body.velocity.y*60;}}
  else this.fallbackStep(dt);}
  fallbackStep(dt){
  const balls=state.active,tiles=[];
- for(const tile of state.tiles)if(!tile.removed&&tile.kind!=='nest')tiles.push({tile,pos:tilePos(tile)});
+ for(const tile of state.tiles)if(!tile.removed&&tile.kind!=='nest'&&!tile.jump)tiles.push({tile,pos:tilePos(tile)});
  const acceleration=gravity(),xmin=26,xmax=574;for(const b of balls){if(b.dead)continue;b.vy+=acceleration*dt;b.vx*=.999;b.vy*=.999;b.x+=b.vx*dt;b.y+=b.vy*dt;
   if(b.x-b.r<xmin){b.x=xmin+b.r;b.vx=Math.abs(b.vx)*.88;}if(b.x+b.r>xmax){b.x=xmax-b.r;b.vx=-Math.abs(b.vx)*.88;}
   if(b.y-b.r<state.cameraY+92&&b.vy<0){b.y=state.cameraY+92+b.r;b.vy=Math.abs(b.vy)*.8;}
@@ -263,7 +302,7 @@ class PhysicsWorld{
       overlap=b.r+5-d;if(overlap>0){nx=cx/d;ny=cy/d;const tangential=t.spin*proj;b.vx-=uy*tangential*.52;b.vy+=ux*tangential*.52;}
     }else{overlap=b.r+((t.kind==='switch'||t.kind==='lever')?20:21*tileScale(t))-dist;if(overlap>0){nx=dx/dist;ny=dy/dist;}}
    }
-   else {const scale=tileScale(t),hx=t.kind==='boss'?50:t.obstacle&&t.gateIndex!==null?30:t.kind==='cat'?(t.caged?50:31):21*scale,hy=t.kind==='cat'?(t.caged?46:29):t.kind==='boss'?46:20*scale,px=clamp(b.x,p.x-hx,p.x+hx),py=clamp(b.y,p.y-hy,p.y+hy),dx=b.x-px,dy=b.y-py,dist=Math.hypot(dx,dy);overlap=b.r-dist;if(overlap>0){if(dist>.0001){nx=dx/dist;ny=dy/dist;}else{nx=b.x>p.x?1:-1;ny=0;overlap=b.r+3;}}}
+   else {const scale=tileScale(t),hx=t.kind==='boss'?50:t.obstacle&&t.gateIndex!==null?30:t.kind==='cat'?(t.caged?50:27):21*scale,hy=t.kind==='cat'?(t.caged?46:25):t.kind==='boss'?46:20*scale,px=clamp(b.x,p.x-hx,p.x+hx),py=clamp(b.y,p.y-hy,p.y+hy),dx=b.x-px,dy=b.y-py,dist=Math.hypot(dx,dy);overlap=b.r-dist;if(overlap>0){if(dist>.0001){nx=dx/dist;ny=dy/dist;}else{nx=b.x>p.x?1:-1;ny=0;overlap=b.r+3;}}}
    if(overlap>0){b.x+=nx*(overlap+.015);b.y+=ny*(overlap+.015);const vn=b.vx*nx+b.vy*ny;
     if(vn<0){const restitution=t.kind==='spring'?1.28:.85;b.vx-=(1+restitution)*vn*nx;b.vy-=(1+restitution)*vn*ny;}
     if(!b.lastContacts||state.worldTime-(b.lastContacts[t.id]||-99)>.13){state.events.push({tile:t,ball:b,nx,ny});b.lastContacts??={};b.lastContacts[t.id]=state.worldTime;}
@@ -365,7 +404,9 @@ function installCatCage(room,start){
 function freeCat(t){
  if(!t||t.removed||t.kind!=='cat'||!t.caged)return false;
  const p=tilePos(t);t.caged=false;t.roamX=p.x;t.roamY=p.y;t.homeX=p.x;t.homeY=p.y;
- t.swipe=2;t.glow=3;t.cageHits=t.cageNeed;
+ t.swipe=2;t.glow=3;t.cageHits=t.cageNeed;t.freedAt=state.worldTime;t.catVX=0;t.catVY=0;
+ // The empty cage is no longer a permanent, invisible grid obstacle.
+ markCells(t,false);
  phys.removeTile(t);phys.addTile(t);
  state.catsFreed++;
  // A rescue starts a short, free-fire burst. The marbles keep standard physics.
@@ -418,7 +459,8 @@ function updateContraptions(dt){
    const nx=dx/d,ny=dy/d,vn=b.vx*nx+b.vy*ny;
    b.x+=nx*(overlap+1.2);b.y+=ny*(overlap+1.2);
    if(vn<0){const sideVel=k.kind==='shutter'?Math.cos(time*1.2+k.phase)*k.amp*1.2:k.kind==='pendulum'?Math.cos(time*1.5+k.phase)*k.amp*1.5:0;
-    phys.setVel(b,b.vx-(1.72*vn)*nx+sideVel*.5,b.vy-(1.72*vn)*ny-35);
+    const wound=time<(k.boostUntil||0);
+    phys.setVel(b,b.vx-((wound?2.06:1.72)*vn)*nx+sideVel*.5,b.vy-((wound?2.06:1.72)*vn)*ny-(wound?130:35));
     if(time-k.hitTime>.11){k.hitTime=time;k.kick=1;state.chain++;state.chainTime=time;addScore(45);sound('hit',{x:k.nowX,family:'gold'});sparkle(k.nowX,k.nowY,'#f5cf80',6,.65);}
    }
   }
@@ -503,6 +545,7 @@ function openGate(gate){
  const bonus=gatePrize(gate);state.reserve+=bonus;
  state.gateAwards.push({gate:gate.index+1,balls:bonus,shots:state.shots});
  if(state.gates.length-state.gatesPassed<3)buildCourse(state.gates.length,4);
+ retirePreviousCats();
  addScore(800);
  sound('gate');sparkle(300,CY+gate.row*SY,'#f4ce86',40,2);
  updateUI();
@@ -589,10 +632,13 @@ function restoreRun(){
   ROWS=snapshot.rows;for(const key of Object.keys(state))if(!RUN_TRANSIENT_KEYS.has(key)&&Object.hasOwn(snapshot.state,key))state[key]=snapshot.state[key];const savedCats=JSON.parse(readSaved('cats','[]'));state.catCollection=new Set([...(state.catCollection||[]),...savedCats].filter(i=>Number.isInteger(i)&&i>=0&&i<CAT_TYPES.length));state.started=true;state.paused=false;state.pointerDown=false;state.pointerFired=false;state.holdTime=0;state.keyboardFire=false;state.events=[];
   state.tiles=Array.isArray(snapshot.tiles)?snapshot.tiles.filter(t=>!t.removed):[];state.active=Array.isArray(snapshot.active)?snapshot.active.filter(b=>!b.dead):[];
   state.grid=Array.from({length:ROWS},()=>Array(COLS).fill(null));phys=new PhysicsWorld();seed=(snapshot.seed??state.courseSeed)>>>0;
-  for(const t of state.tiles){t.body=null;t.captures??=[];markCells(t,true);phys.addTile(t);}
+  for(const t of state.tiles){t.body=null;t.captures??=[];if(t.kind!=='cat'||t.caged)markCells(t,true);if(!t.jump)phys.addTile(t);}
   for(const b of state.active){b.body=null;b.dead=false;b.held=false;b.trail??=[];b.lastContacts??={};phys.addBall(b);}
   if(state.ended){$('pauseBtn').innerHTML='↺';$('pauseBtn').setAttribute('aria-label','Play again');showGameOver();}
   else{$('pauseBtn').textContent='Ⅱ';$('pauseBtn').setAttribute('aria-label','Pause game');}
+  // Saved runs from earlier releases may contain two or three imported cats.
+  // Retire them on load so the one-cat-per-level rule also applies immediately.
+  retirePreviousCats();state.tiles=state.tiles.filter(t=>!t.removed);
   $('pauseControls').hidden=true;updateUI();persistBestDistance();lastRunSaveTime=state.worldTime;return true;
  }catch(e){try{localStorage.removeItem('purrchinko.run');}catch{}return false;}
 }
@@ -658,7 +704,7 @@ function impact(t,b,nx,ny){if(!t||t.removed||!b||b.dead||b.held)return;if(!b.las
   return;
  }
  if(t.kind==='bubble'||t.kind==='clock'||t.kind==='bowl'||t.kind==='portal'||t.kind==='moon'){if(t.kind==='bowl'&&Math.random()<.15)return;capture(t,b);return;}
- if(t.kind==='spring'||t.kind==='paw'||t.kind==='heart'){const vx=b.vx+rand(-165,165),vy=-Math.max(250,Math.abs(b.vy)*.9);phys.setVel(b,vx,vy);if(t.kind==='paw'){phys.setVel(b,b.vx+(b.x>p.x?280:-280),b.vy-75);}}
+ if(t.kind==='spring'||t.kind==='paw'||t.kind==='heart'){const vx=b.vx+rand(-165,165),wound=t.kind==='spring'&&state.worldTime<(t.boostUntil||0),vy=-Math.max(wound?510:250,Math.abs(b.vy)*(wound?1.3:.9));phys.setVel(b,vx,vy);if(t.kind==='paw'){phys.setVel(b,b.vx+(b.x>p.x?280:-280),b.vy-75);}}
  if(t.kind==='mirror'){const dx=b.x-p.x,dy=b.y-p.y;phys.setVel(b,clamp((b.vy*(dx>=0?1:-1))*.87,-810,810),clamp((b.vx*(dy>=0?1:-1))*.85,-680,680));}
  if(t.kind==='rotor'||t.kind==='sun'){t.spin+=speed*.004*(b.x<p.x?-1:1);}
  if(t.kind==='seesaw'){t.angle+=clamp((b.x-p.x)*.013,-.3,.3);if(count>=2)phys.setVel(b,b.vx+rand(-210,210),-Math.abs(b.vy)*1.15-90);}
@@ -685,100 +731,393 @@ function damageBrick(t){
 }
 function catTargets(t){
  const p=tilePos(t);
- return state.tiles.filter(u=>!u.removed&&u!==t&&u.kind!=='cat'&&u.kind!=='nest'&&!u.hazard&&Math.hypot(tilePos(u).x-p.x,tilePos(u).y-p.y)<220)
+ return state.tiles.filter(u=>!u.removed&&u!==t&&u.kind!=='cat'&&u.kind!=='nest'&&!u.hazard&&Math.floor(u.r/10)===t.room&&Math.hypot(tilePos(u).x-p.x,tilePos(u).y-p.y)<220)
  .sort((a,b)=>Math.hypot(tilePos(a).x-p.x,tilePos(a).y-p.y)-Math.hypot(tilePos(b).x-p.x,tilePos(b).y-p.y)).slice(0,4);
 }
+function catPulse(x,y,radius=150,power=190,color='#e4c98e'){
+ // A playful chain reaction: push existing ordinary marbles toward new
+ // collisions, with finite velocity and no free projectile generation.
+ for(const b of state.active){if(b.dead||b.held)continue;
+  const dx=b.x-x,dy=b.y-y,d=Math.hypot(dx,dy);
+  if(d<12||d>=radius)continue;
+  const strength=power*(1-d/radius),nx=dx/d;
+  const vx=b.vx+nx*strength,vy=b.vy-Math.max(95,strength*.95);
+  const speed=Math.hypot(vx,vy),ratio=Math.min(1,850/Math.max(1,speed));
+  phys.setVel(b,vx*ratio,vy*ratio);
+ }
+ state.mergeFX.push({pulse:true,x,y,color,radius,age:0,life:.52});cap(state.mergeFX,16);
+ sparkle(x,y,color,10,.7);
+}
+const CAT_SPEED=[145,132,165,138];
+function catBounds(room){return {minY:CY+(room*10+1.15)*SY,maxY:CY+(room*10+7)*SY-34};}
+function catClearSpot(t,x,y){
+ const bounds=catBounds(t.room);
+ if(x<54||x>546||y<bounds.minY||y>bounds.maxY)return false;
+ // Check occupied grid cells, including large cages and nests. Free cats have
+ // no grid footprint; otherwise a rescued cat would block its original cage forever.
+ const row=Math.round((y-CY)/SY),col=Math.round((x-CX)/SX),seen=new Set();
+ for(let r=row-2;r<=row+2;r++)for(let c=col-2;c<=col+2;c++){
+  const u=state.grid[r]?.[c];if(!u||u===t||u.removed||seen.has(u))continue;seen.add(u);
+  const q=tilePos(u),hx=u.span===2?53:23,hy=u.span===2?49:22;
+  if(Math.abs(q.x-x)<hx+22&&Math.abs(q.y-y)<hy+21)return false;
+ }
+ for(const u of state.tiles){if(u===t||u.removed||u.kind!=='cat'||u.caged||u.room!==t.room)continue;
+  if(Math.hypot(u.roamX-x,u.roamY-y)<55)return false;
+ }
+ return true;
+}
+function catMoveTo(t,goal,dt,speed=CAT_SPEED[t.catType],stop=9){
+ const bounds=catBounds(t.room),gx=clamp(goal.x,54,546),gy=clamp(goal.y,bounds.minY,bounds.maxY);
+ const dx=gx-t.roamX,dy=gy-t.roamY,dist=Math.hypot(dx,dy);
+ t.catVX=0;t.catVY=0;
+ if(dist<=stop)return true;
+ const step=Math.min(speed*dt,dist-stop),a=Math.atan2(dy,dx),side=t.id%2?1:-1;
+ const offsets=[0,side*.5,-side*.5,side*1.05,-side*1.05,side*1.58,-side*1.58,Math.PI];
+ let found=null;
+ for(const turn of offsets){const x=t.roamX+Math.cos(a+turn)*step,y=t.roamY+Math.sin(a+turn)*step;
+  if(catClearSpot(t,x,y)){found={x,y};break;}
+ }
+ if(found){t.catVX=(found.x-t.roamX)/dt;t.catVY=(found.y-t.roamY)/dt;
+  t.roamX=found.x;t.roamY=found.y;t.walkPhase+=dt*(5+speed/50);
+ }
+ const remaining=Math.hypot(gx-t.roamX,gy-t.roamY);
+ t.stuckFor=remaining<dist-.35?0:(t.stuckFor||0)+dt;
+ if(t.stuckFor>.5&&dist>85&&state.worldTime>(t.lastJumpAt||-99)+2.5){
+  // A short, non-colliding leap is the escape from genuinely sealed brick
+  // clusters. Land only in a vacant spot; marbles never get crushed inside a tile.
+  const hops=[];
+  for(const len of [125,165,205])for(const offset of [0,side*.42,-side*.42,side*.9,-side*.9]){
+   const x=t.roamX+Math.cos(a+offset)*len,y=t.roamY+Math.sin(a+offset)*len;
+   if(catClearSpot(t,x,y)&&Math.hypot(gx-x,gy-y)<remaining-55)hops.push({x,y,dist:Math.hypot(gx-x,gy-y)});
+  }
+  // If a dense wall blocks the short arcs, consider a clear perch elsewhere
+  // in this room instead of repeating the same two-pixel shuffle forever.
+  if(!hops.length)for(let rr=2;rr<=6;rr++)for(let cc=0;cc<COLS;cc++){
+   const q=cellPos(t.room*10+rr,cc),distance=Math.hypot(q.x-t.roamX,q.y-t.roamY),remainingAtQ=Math.hypot(gx-q.x,gy-q.y);
+   if(distance>90&&distance<295&&remainingAtQ<remaining-45&&catClearSpot(t,q.x,q.y))hops.push({x:q.x,y:q.y,dist:remainingAtQ});
+  }
+  hops.sort((u,v)=>u.dist-v.dist);
+  if(hops.length){const to=hops[0];t.jump={fromX:t.roamX,fromY:t.roamY,toX:to.x,toY:to.y,start:state.worldTime,duration:.62};
+   t.lastJumpAt=state.worldTime;t.stuckFor=0;t.catVX=t.catVY=0;t.swipe=1.5;
+   phys.removeTile(t);sparkle(t.roamX,t.roamY,CAT_TYPES[t.catType].color,9,.7);sound('hop',{x:t.roamX});
+  }
+ }
+ return false;
+}
+function updateCatJump(t){
+ const j=t.jump;if(!j)return false;
+ const u=clamp((state.worldTime-j.start)/j.duration,0,1),s=u*u*(3-2*u);
+ t.roamX=lerp(j.fromX,j.toX,s);t.roamY=lerp(j.fromY,j.toY,s);
+ t.catVX=t.catVY=0;t.walkPhase+=.22;t.visualX=t.roamX;t.visualY=t.roamY;
+ if(u>=1){
+  let landing=catClearSpot(t,j.toX,j.toY)?{x:j.toX,y:j.toY}:null;
+  // A tile may have merged or been pushed into the reserved landing midair.
+  if(!landing){const options=[];
+   for(let rr=1;rr<=7;rr++)for(let cc=0;cc<COLS;cc++){
+    const q=cellPos(t.room*10+rr,cc);
+    if(catClearSpot(t,q.x,q.y))options.push({...q,dist:Math.hypot(q.x-j.toX,q.y-j.toY)});
+   }
+   options.sort((a,b)=>a.dist-b.dist);landing=options[0]||null;
+  }
+  if(landing){t.roamX=t.visualX=landing.x;t.roamY=t.visualY=landing.y;t.jump=null;phys.addTile(t);
+   sparkle(t.roamX,t.roamY,CAT_TYPES[t.catType].color,9,.55);sound('land',{x:t.roamX});
+  }else{ // Remain collision-free until a legal perch opens; retry, never embed.
+   j.fromX=t.roamX;j.fromY=t.roamY;j.toX=t.roamX;j.toY=t.roamY;j.start=state.worldTime;j.duration=.25;
+  }
+ }
+ return true;
+}
+function catPerch(t){
+ const bell=t.catType===0?liveBell(t.room):null;
+ if(bell){const q=tilePos(bell);return {x:clamp(q.x+(q.x<300?92:-92),65,535),y:q.y+74};}
+ return {x:t.homeX+17*Math.sin(state.worldTime*.7+t.id),y:t.homeY+12*Math.cos(state.worldTime*.6+t.id)};
+}
+function catMarble(t,range=165){
+ const p=tilePos(t),bounds=catBounds(t.room);
+ return state.active.filter(b=>!b.dead&&!b.held&&(b.catSafeUntil||0)<=state.worldTime&&
+   b.y>bounds.minY-100&&b.y<bounds.maxY+100&&Math.hypot(b.x-p.x,b.y-p.y)<range)
+  .sort((a,b)=>Math.hypot(a.x-p.x,a.y-p.y)-Math.hypot(b.x-p.x,b.y-p.y))[0]||null;
+}
+function catCrew(){return state.tiles.filter(t=>!t.removed&&t.kind==='cat'&&!t.caged&&t.room===state.gatesPassed&&Math.floor(t.r/10)===state.gatesPassed)
+ .sort((a,b)=>(b.freedAt||0)-(a.freedAt||0)||b.id-a.id).slice(0,1);}
+function retirePreviousCats(){
+ // Each room supplies its own helper. Older freed cats leave the board when
+ // the gate opens, even if an older save had already moved them into this room.
+ const locals=state.tiles.filter(t=>!t.removed&&t.kind==='cat'&&!t.caged&&t.room===state.gatesPassed&&Math.floor(t.r/10)===state.gatesPassed)
+  .sort((a,b)=>(b.freedAt||0)-(a.freedAt||0)||b.id-a.id);
+ for(const t of state.tiles){
+  if(t.removed||t.kind!=='cat'||t.caged)continue;
+  if(t===locals[0])continue;
+  // A full Pepper pouch contains the player's fired marbles. Refund these
+  // instead of leaving captured shots invisible in a completed room.
+  if(t.captures?.length){state.reserve+=t.captures.length;t.captures.length=0;}
+  if(t.carry){
+   const origin=t.carry.origin;
+   let cell=origin&&fits(origin.r,origin.c,1)?origin:null;
+   const homeRoom=Math.floor(t.r/10);
+   if(!cell)for(let r=homeRoom*10+1;r<homeRoom*10+8&&!cell;r++)for(let c=0;c<COLS;c++){
+    if(fits(r,c,1)){cell={r,c};break;}
+   }
+   if(cell)createTile(cell.r,cell.c,t.carry.family);
+   else state.reserve+=1; // A completely full room converts the tile to ammo.
+   t.carry=null;
+  }
+  t.job=null;phys.removeTile(t);t.removed=true;
+ }
+}
 function catHit(t,b,force=false){
- if(t.caged)return;
+ if(t.caged||t.room!==state.gatesPassed||!catCrew().includes(t)||(!force&&state.worldTime-(t.lastSwatAt??-99)<.82))return false;
+ t.lastSwatAt=state.worldTime;
  t.catCharge=Math.min(3,t.catCharge+1);t.swipe=1.5;t.wobble=1.8;
- sound('cat',{x:tilePos(t).x});
+ if(!b||(t.catType!==0&&t.catType!==2))sound('cat',{x:tilePos(t).x});
+ if(b&&!b.dead&&!b.held){
+  if(t.catType===2&&t.captures.length<3&&stealBall(t,b)){
+   t.catLastAction=state.worldTime;return true;
+  }
+  // Static Matter bodies don't impart their scripted walking velocity. Make
+  // a charging paw genuinely change the marble's trajectory in both solvers.
+  const vx=b.vx+(t.catVX||0)*.85,vy=b.vy+(t.catVY||0)*.65-105;
+  const speed=Math.hypot(vx,vy),scale=Math.min(1,840/Math.max(1,speed));
+  phys.setVel(b,vx*scale,vy*scale);
+ }
  if(t.catType===0&&b&&!b.dead){
   const bell=liveBell(t.room),p=tilePos(t),q=bell?tilePos(bell):{x:p.x+(b.x<p.x?-170:170),y:p.y-140};
   const dx=q.x-b.x,dy=q.y-b.y,m=Math.hypot(dx,dy)||1;
-  phys.setVel(b,dx/m*560,dy/m*560-95);t.swipe=2;
+  phys.setVel(b,dx/m*560+(t.catVX||0)*.46,dy/m*560-95+(t.catVY||0)*.28);t.swipe=2;
+  if(t.catCharge===2){for(const other of state.active){if(other===b||other.dead||other.held)continue;
+   const d=Math.hypot(other.x-p.x,other.y-p.y);
+   if(d<110&&d>10)phys.applyAcceleration(other,dx/m*1400,dy/m*1050-450,.045);
+  }}
+  state.catLinks.push({x:p.x,y:p.y,tx:b.x,ty:b.y,life:.34,color:'#e7bd86'});
+  sound('swat',{x:p.x});
   sparkle(p.x,p.y,'#e7bd86',12);state.catActions++;
  }
- if(t.catCharge>=3||force){t.catCharge=0;catAbility(t,b,true);}
+ if(t.catCharge>=3||force){if(catAbility(t,b,true))t.catCharge=0;}
+ return true;
 }
 function liveBell(room=state.gatesPassed){
  const gate=state.gates[room];if(!gate||gate.opened)return null;
  const id=gate.switchIds.find((v,i)=>gate.bolts[i]>0&&(!gate.boss||(gate.phase===0?i!==1:i===1)));
  return state.tiles.find(t=>!t.removed&&t.id===id)||null;
 }
+function planMisoJob(t){
+ const blocks=catTargets(t).filter(u=>u.kind==='block');
+ for(const victim of blocks){
+  if(victim.id===t.failedVictimId&&state.worldTime<(t.failedVictimUntil||0))continue;
+  const buddy=state.tiles.find(u=>!u.removed&&u!==victim&&u.kind==='block'&&u.family===victim.family&&Math.floor(u.r/10)===t.room&&
+   Math.hypot(tilePos(u).x-tilePos(victim).x,tilePos(u).y-tilePos(victim).y)<240&&
+   [[0,1],[0,-1],[1,0],[-1,0],[1,1],[-1,-1]].some(([dr,dc])=>fits(u.r+dr,u.c+dc,1)));
+  if(!buddy)continue;
+  t.job={kind:'fetch',victimId:victim.id,buddyId:buddy.id,started:state.worldTime};
+  return true;
+ }
+ return false;
+}
+function misoDropSpot(job,t){
+ const buddy=state.tiles.find(u=>u.id===job.buddyId&&!u.removed&&u.kind==='block');
+ if(buddy){const neighbors=[[0,1],[0,-1],[1,0],[-1,0],[1,1],[-1,1],[1,-1],[-1,-1]];
+  const found=neighbors.map(([dr,dc])=>({r:buddy.r+dr,c:buddy.c+dc})).find(s=>fits(s.r,s.c,1));
+  if(found)return found;
+ }
+ if(job.origin&&Math.floor(job.origin.r/10)===t.room&&fits(job.origin.r,job.origin.c,1))return job.origin;
+ if(job.origin&&Math.floor(job.origin.r/10)===t.room)for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++){
+  const r=job.origin.r+dr,c=job.origin.c+dc;
+  if(Math.floor(r/10)===Math.floor(job.origin.r/10)&&fits(r,c,1))return {r,c};
+ }
+ const choices=[];
+ for(let r=t.room*10+2;r<t.room*10+7;r++)for(let c=0;c<COLS;c++)if(fits(r,c,1)){
+  const q=cellPos(r,c);choices.push({r,c,dist:Math.hypot(q.x-t.roamX,q.y-t.roamY)});
+ }
+ choices.sort((a,b)=>a.dist-b.dist);
+ if(choices.length)return choices[0];
+ return null;
+}
+function updateMisoJob(t,dt){
+ const job=t.job;if(!job||!['fetch','deliver'].includes(job.kind))return false;
+ if(job.kind==='fetch'){
+  const victim=state.tiles.find(u=>u.id===job.victimId&&!u.removed&&u.kind==='block');
+  if(!victim){t.job=null;return false;}
+  if(state.worldTime-job.started>5){t.failedVictimId=job.victimId;t.failedVictimUntil=state.worldTime+14;t.job=null;t.catLastAction=state.worldTime;return false;}
+  const p=tilePos(victim);
+  if(Math.hypot(t.roamX-p.x,t.roamY-p.y)>74){catMoveTo(t,p,dt,CAT_SPEED[1],73);return true;}
+  const origin={r:victim.r,c:victim.c};t.carry={family:victim.family,origin,until:state.worldTime+6};
+  destroyTile(victim);t.job={kind:'deliver',buddyId:job.buddyId,origin,started:state.worldTime};
+  t.swipe=1.8;sparkle(p.x,p.y,'#a5bda5',14,.6);sound('fetch',{x:p.x});return true;
+ }
+ if(!t.carry){t.job=null;return false;}
+ const spot=misoDropSpot(job,t);
+ if(!spot){
+  // Never silently destroy the stolen block on a full board. If its matching
+  // partner is reachable, combine them in place; otherwise keep the cargo.
+  const buddy=state.tiles.find(u=>u.id===job.buddyId&&!u.removed&&u.kind==='block'&&u.family===t.carry?.family);
+  if(buddy){const q=tilePos(buddy);
+   if(Math.hypot(t.roamX-q.x,t.roamY-q.y)>95){catMoveTo(t,q,dt,CAT_SPEED[1],93);return true;}
+   const family=buddy.family;destroyTile(buddy);
+   const evolved=createTile(buddy.r,buddy.c,family,1);
+   if(evolved){evolved.glow=3;evolved.wobble=2;state.merges++;state.actions++;addScore(220);
+    sparkle(q.x,q.y,CAT_TYPES[1].color,28,1.4);sound('merge',{x:q.x,family,tier:1});t.deliveries=(t.deliveries||0)+1;
+   }
+   t.carry=null;t.job=null;t.catLastAction=state.worldTime;return true;
+  }
+  if(state.worldTime-job.started>5){t.catLastAction=state.worldTime;catMoveTo(t,catPerch(t),dt,80,14);}
+  return true;
+ }
+ const q=cellPos(spot.r,spot.c);
+ if(Math.hypot(t.roamX-q.x,t.roamY-q.y)>90&&state.worldTime-job.started<5){catMoveTo(t,q,dt,CAT_SPEED[1],88);return true;}
+ const block=fits(spot.r,spot.c,1)?createTile(spot.r,spot.c,t.carry?.family||'sage'):null;
+ if(block){
+  t.deliveries=(t.deliveries||0)+1;
+  state.catLinks.push({x:t.roamX,y:t.roamY,tx:q.x,ty:q.y,life:.45,color:'#a5bda5'});
+  sparkle(q.x,q.y,'#afd5aa',14,.8);const merged=popNearby(block,1);
+  if(merged)catPulse(q.x,q.y,165,210,'#a5bda5');
+  // Cats combine their specialties, but this bonus cannot fire on every tile.
+  const sunny=catCrew().find(u=>u.catType===3&&Math.hypot(u.roamX-q.x,u.roamY-q.y)<200);
+  if(sunny&&merged&&state.worldTime-(sunny.lastComboWind??-99)>9){
+   sunny.lastComboWind=state.worldTime;sunny.glow=2;
+   const machine=chooseSunnyMachine(sunny);
+   if(machine){
+    if(machine.kind==='tile'){const u=state.tiles.find(v=>v.id===machine.id&&!v.removed);if(u){if(u.kind==='spring')u.boostUntil=state.worldTime+2.4;else u.spin+=3;u.glow=2;}}
+    else{const k=state.kickers[machine.index];if(k)k.boostUntil=Math.max(k.boostUntil||0,state.worldTime+2.4);}
+   }
+   state.catLinks.push({x:q.x,y:q.y,tx:sunny.roamX,ty:sunny.roamY,life:.45,color:'#e3bb60'});
+  }
+ }
+ t.carry=null;t.job=null;t.catLastAction=state.worldTime;t.swipe=2;
+ sound('drop',{x:q.x});
+ return true;
+}
+function closestNest(t){
+ const p=tilePos(t);
+ return state.tiles.filter(u=>!u.removed&&u.kind==='nest'&&u.room===t.room&&u.captures.length<u.capacity)
+  .sort((a,b)=>Math.hypot(tilePos(a).x-p.x,tilePos(a).y-p.y)-Math.hypot(tilePos(b).x-p.x,tilePos(b).y-p.y))[0]||null;
+}
+function pepperDeposit(t,nest){
+ if(!nest||!t.captures.length)return false;
+ const p=tilePos(t),q=tilePos(nest),count=Math.min(t.captures.length,nest.capacity-nest.captures.length);
+ if(count<=0)return false;
+ nest.captures.push(...t.captures.splice(0,count));nest.swipe=2;t.lastSpit=state.worldTime;t.swipe=2;t.catCharge=0;
+ nest.lureUntil=state.worldTime+2.4;
+ t.deposits=(t.deposits||0)+1;
+ state.catLinks.push({x:p.x,y:p.y,tx:q.x,ty:q.y,life:.45,color:'#a7d5cf'});
+ catPulse(q.x,q.y,104,90,'#a7d5cf');sparkle(q.x,q.y,'#a7d5cf',12+count*5);sound('deposit',{x:q.x});
+ const mochi=catCrew().find(u=>u.catType===0&&u.catCharge>0&&u.catCharge<2);
+ if(mochi){mochi.catCharge++;mochi.glow=1.5;}
+ state.catActions++;return true;
+}
+function chooseSunnyMachine(t){
+ const p=tilePos(t),machines=[];
+ for(const u of state.tiles)if(!u.removed&&['rotor','sun','spring'].includes(u.kind)&&Math.floor(u.r/10)===t.room){
+  const q=tilePos(u);machines.push({kind:'tile',id:u.id,key:`t${u.id}`,x:q.x,y:q.y,wound:u.kind==='spring'?Math.max(0,(u.boostUntil||0)-state.worldTime)/5:Math.abs(u.spin)/7});
+ }
+ for(const [i,k] of state.kickers.entries())if(k.room===t.room){machines.push({kind:'kicker',index:i,key:`k${k.room}:${k.x}:${k.y}`,x:k.nowX??k.x,y:k.nowY??k.y,wound:Math.max(0,(k.boostUntil||0)-state.worldTime)/5});}
+ machines.sort((a,b)=>a.wound-b.wound||Math.hypot(a.x-p.x,a.y-p.y)-Math.hypot(b.x-p.x,b.y-p.y));
+ return machines.find(m=>m.key!==t.failedMachineKey||state.worldTime>=(t.failedMachineUntil||0))||null;
+}
+function updateSunnyJob(t,dt){
+ const job=t.job;if(!job||job.kind!=='wind')return false;
+ const machine=job.target.kind==='tile'?state.tiles.find(u=>u.id===job.target.id&&!u.removed):state.kickers[job.target.index];
+ if(!machine){t.failedMachineKey=job.target.key;t.failedMachineUntil=state.worldTime+12;t.job=null;t.catLastAction=state.worldTime;return false;}
+ const q=job.target.kind==='tile'?tilePos(machine):{x:machine.nowX??machine.x,y:machine.nowY??machine.y};
+ if(Math.hypot(t.roamX-q.x,t.roamY-q.y)>105){
+  if(state.worldTime-job.started>4.5){t.failedMachineKey=job.target.key;t.failedMachineUntil=state.worldTime+12;t.job=null;t.catLastAction=state.worldTime;return false;}
+  catMoveTo(t,q,dt,CAT_SPEED[3],103);return true;
+ }
+ if(job.target.kind==='tile'){if(machine.kind==='spring')machine.boostUntil=state.worldTime+5;else machine.spin=Math.max(machine.spin,2)+7;machine.charge=1.3;machine.glow=2.5;}
+ else{machine.boostUntil=state.worldTime+5;machine.kick=2;}
+ catPulse(q.x,q.y,135,175,'#f4d46e');
+ t.winds=(t.winds||0)+1;
+ state.catLinks.push({x:t.roamX,y:t.roamY,tx:q.x,ty:q.y,life:.45,color:'#e3bb60'});
+ sparkle(q.x,q.y,'#f4d46e',24,1.2);sound('wind',{x:q.x});
+ t.job=null;t.swipe=2;t.catLastAction=state.worldTime;state.catActions++;return true;
+}
 function catAbility(t,b=null,boost=false){
- if(t.caged)return false;
+ if(t.caged||t.room!==state.gatesPassed||!catCrew().includes(t))return false;
  const p=tilePos(t),targets=catTargets(t),ability=CAT_TYPES[t.catType].ability;
- t.swipe=2;t.glow=2;t.catLastAction=state.worldTime;state.catActions++;
  if(ability==='bat'){
   const bell=liveBell(t.room);
-  if(bell&&Math.hypot(tilePos(bell).x-p.x,tilePos(bell).y-p.y)<195){const q=tilePos(bell);
+  if(bell&&state.worldTime-(t.lastBellAssist??-99)>10&&Math.hypot(tilePos(bell).x-p.x,tilePos(bell).y-p.y)<195){const q=tilePos(bell);
    // The paw visually bats a fish-shaped star into the bell; it's earned
    // cooperation, not a hidden random door bypass.
    state.catLinks.push({x:p.x,y:p.y,tx:q.x,ty:q.y,life:.45,color:CAT_TYPES[t.catType].color});
-   activateBell(bell,null);
-  }else for(const u of targets.slice(0,2))if(u.kind==='block')popNearby(u,1);
+   if(!activateBell(bell,null))return false;t.lastBellAssist=state.worldTime;
+  }else if(!bell){for(const u of targets.slice(0,2))if(u.kind==='block')popNearby(u,1);}
+  else return false;
  }else if(ability==='steal'){
-  const candidates=targets.filter(q=>q.kind==='block');
-  const victim=candidates[0];
-  if(victim){const family=victim.family,origin=tilePos(victim);
-   t.carry={family,until:state.worldTime+1.2};destroyTile(victim);
-   const buddy=state.tiles.find(u=>!u.removed&&u.kind==='block'&&u.family===family&&Math.hypot(tilePos(u).x-p.x,tilePos(u).y-p.y)<245);
-   if(buddy){const neighbors=[[0,1],[0,-1],[-1,0],[1,0],[1,1],[-1,-1]];
-    const spot=neighbors.map(([dr,dc])=>({r:buddy.r+dr,c:buddy.c+dc})).find(q=>fits(q.r,q.c,1));
-    if(spot){const brought=createTile(spot.r,spot.c,family);if(brought)popNearby(brought,1);}
-   }else{const spot=[[0,0],[1,0],[-1,0]].map(([dr,dc])=>({r:t.r+dr,c:t.c+2})).find(q=>fits(q.r,q.c,1));if(spot)createTile(spot.r,spot.c,family);}
-   state.catLinks.push({x:origin.x,y:origin.y,tx:p.x,ty:p.y,life:.45,color:'#e9ac77'});
-  }
+  if(t.job||!planMisoJob(t))return false;
  }else if(ability==='collect'){
-  if(t.captures.length){spitCat(t);if(boost&&t.captures.length===0)state.reserve+=1;}
-  else{for(const u of targets.slice(0,2))if(u.kind==='block')popNearby(u,1);}
+  if(!t.captures.length)return false;
+  t.job={kind:'deposit'};
  }else if(ability==='tinker'){
-  for(const u of targets.slice(0,3)){u.glow=2;u.wobble=1.8;
-   if(u.kind==='rotor'||u.kind==='sun')u.spin+=6;
-   else if(u.kind==='block')popNearby(u,1);
-   else if(!u.obstacle)u.charge=1.3;
-  }
-  for(const k of state.kickers.filter(k=>k.room===t.room)){k.disabledUntil=state.worldTime+4;k.frozenX=k.nowX;k.frozenY=k.nowY;k.kick=2;}
+  if(t.job)return false;
+  const machine=chooseSunnyMachine(t);if(!machine)return false;
+  t.job={kind:'wind',target:machine,started:state.worldTime};
  }
- sparkle(p.x,p.y,CAT_TYPES[t.catType].color,22,1.4);sound('purr',{x:p.x});updateUI();return true;
+ t.swipe=2;t.glow=2;t.catLastAction=state.worldTime;state.catActions++;
+ sparkle(p.x,p.y,CAT_TYPES[t.catType].color,12,.75);sound('purr',{x:p.x});updateUI();return true;
 }
 function stealBall(t,b){
  if(b.dead||b.held||t.captures.length>=4||(b.catSafeUntil||0)>state.worldTime)return false;
- t.captures.push({color:b.color,t:state.worldTime});if(t.captures.length>=2)t.catCharge=3;removeBall(b);t.swipe=1;t.lastSteal=state.worldTime;sound('capture',{x:tilePos(t).x});return true;
+ t.captures.push({color:b.color,t:state.worldTime});if(t.captures.length>=2)t.catCharge=3;removeBall(b);t.swipe=1;t.lastSteal=state.worldTime;sound('catch',{x:tilePos(t).x});return true;
 }
 function spitCat(t){
- if(!t.captures.length)return;
+ if(!t.captures.length)return false;
+ const nest=closestNest(t);
+ if(nest&&Math.hypot(tilePos(nest).x-t.roamX,tilePos(nest).y-t.roamY)<125){
+  if(pepperDeposit(t,nest)&&!t.captures.length){t.job=null;return true;}
+ }
  const stored=t.captures.splice(0),p=tilePos(t);
- stored.forEach((c,i)=>releaseCapture(c,t,Math.PI*.2+(i/(Math.max(1,stored.length-1)))*Math.PI*.6));
- t.lastSpit=state.worldTime;t.swipe=1;
+ const q=nest?tilePos(nest):{x:p.x,y:p.y-170},aim=Math.atan2(q.y-p.y,q.x-p.x);
+ stored.forEach((c,i)=>releaseCapture(c,t,aim+(i-(stored.length-1)/2)*.24));
+ t.lastSpit=state.worldTime;t.swipe=1;t.job=null;t.catCharge=0;
+ const mochi=catCrew().find(u=>u.catType===0&&u.catCharge===1);
+ if(mochi){mochi.catCharge=2;mochi.glow=1.5;}
  sparkle(p.x,p.y,CAT_TYPES[t.catType].color,22,1.5);sound('pop',{x:p.x});
+ return true;
 }
 function updateCat(t,dt){
  t.swipe=Math.max(0,t.swipe-dt*2.9);if(t.caged)return;
- const home={x:t.homeX,y:t.homeY},target={x:home.x+25*Math.sin(state.worldTime*.54+t.id),y:home.y+13*Math.cos(state.worldTime*.42+t.id)};
- const dx=target.x-t.roamX,dy=target.y-t.roamY,dist=Math.hypot(dx,dy);
- if(dist>4){const move=Math.min(dist,45*dt);t.roamX=clamp(t.roamX+dx/dist*move,46,554);t.roamY=clamp(t.roamY+dy/dist*move,t.room*10*SY+CY+105,(t.room*10+7)*SY+CY-38);t.walkPhase+=dt*5;}
- const p=tilePos(t);if(t.body&&M)M.Body.setPosition(t.body,p);
- // Free cats keep doing physical work: the block thief rearranges neighbors,
- // and the engineer occasionally winds machinery.
- if((t.catType===1||t.catType===3)&&t.room===state.gatesPassed&&state.worldTime-t.catLastAction>(t.catType===1?5.5:6.5))catAbility(t,null,false);
- if(t.carry&&state.worldTime>t.carry.until)t.carry=null;
- if(state.worldTime-t.catLastAction>.85){const nearby=state.active.find(b=>!b.dead&&!b.held&&Math.hypot(b.x-p.x,b.y-p.y)<(t.catType===2?70:52));
-  if(t.catType===2&&nearby&&t.captures.length<3){stealBall(t,nearby);t.catLastAction=state.worldTime;}
-  else if(t.catType===0&&nearby){catHit(t,nearby);t.catLastAction=state.worldTime;}
-  else if((t.catType===1||t.catType===3)&&nearby)catAbility(t,nearby);
+ t.catVX=t.catVY=0;
+ if(t.room!==state.gatesPassed||!catCrew().includes(t)||state.worldTime<(t.travelUntil||0))return;
+ if(updateCatJump(t))return;
+ const p=tilePos(t),nearby=catMarble(t,t.catType===2?80:59);
+ if(nearby&&Math.hypot(nearby.x-p.x,nearby.y-p.y)<(t.catType===2?70:52))catHit(t,nearby);
+ if(t.catType===1&&(t.job?.kind==='fetch'||t.job?.kind==='deliver')){
+  updateMisoJob(t,dt);
+ }else if(t.catType===3&&t.job?.kind==='wind'){
+  updateSunnyJob(t,dt);
+ }else if(t.catType===2&&(t.captures.length>=3||t.job?.kind==='deposit'||t.captures.length&&state.worldTime-t.captures[0].t>4.8)){
+  const nest=closestNest(t);t.job={kind:'deposit'};
+  if(nest){const q=tilePos(nest);
+   if(Math.hypot(q.x-t.roamX,q.y-t.roamY)<119){pepperDeposit(t,nest);if(!t.captures.length)t.job=null;}
+   else catMoveTo(t,q,dt,145,116);
+  }else spitCat(t);
+ }else{
+  if((t.catType===1||t.catType===3)&&state.worldTime-t.catLastAction>(t.catType===1?5.5:6.5))catAbility(t);
+  if(t.job?.kind==='fetch')updateMisoJob(t,dt);
+  else if(t.job?.kind==='wind')updateSunnyJob(t,dt);
+  else if(state.pointerDown&&Math.hypot(state.aimX-t.roamX,state.aimY-t.roamY)<110){
+   catMoveTo(t,{x:state.aimX,y:state.aimY},dt,CAT_SPEED[t.catType]*1.04,19);
+  }else if(t.catType===2){
+   const falling=state.active.filter(b=>!b.dead&&!b.held&&b.vy>75&&Math.hypot(b.x-t.roamX,b.y-t.roamY)<225)
+    .sort((a,b)=>Math.abs(a.y-t.roamY)-Math.abs(b.y-t.roamY))[0];
+   if(falling){const when=clamp((t.roamY-falling.y)/Math.max(110,falling.vy),0,.7);
+    catMoveTo(t,{x:falling.x+falling.vx*when,y:falling.y+falling.vy*when+24},dt,CAT_SPEED[2],12);
+   }else catMoveTo(t,catPerch(t),dt,90,12);
+  }else{
+   const marble=catMarble(t,165);
+   catMoveTo(t,marble?{x:marble.x,y:marble.y}:catPerch(t),dt,marble?CAT_SPEED[t.catType]:96,marble?35:13);
+  }
  }
- if(t.catType===2&&t.captures.length>=3)spitCat(t);
- if(t.captures.length&&state.worldTime-t.captures[0].t>5)spitCat(t);
+ phys.moveTile(t);
 }
 function capture(t,b){if(b.dead||b.held)return;if(t.captures.length>=5){releaseAll(t);return;}sound('capture',{x:tilePos(t).x});b.held=true;removeBall(b);t.captures.push({color:b.color,t:state.worldTime});t.glow=1;t.wobble+=.4;const threshold=t.kind==='bubble'?3:t.kind==='clock'?4:t.kind==='bowl'?3:t.kind==='portal'?2:t.kind==='moon'?5:2;if(t.captures.length>=threshold){releaseAll(t);addScore(95*t.tier);if(t.kind==='portal'){state.reserve+=1;state.earned.portal++;}}}
 function releaseAll(t){const a=t.captures.splice(0),p=tilePos(t);a.forEach((c,i)=>releaseCapture(c,t,(TAU*i/Math.max(a.length,3))-Math.PI*.5+rand(-.18,.18)));sparkle(p.x,p.y,THEMES[state.phase].accent,13+Math.floor(a.length*2));sound('pop',{x:p.x});}
-function releaseCapture(c,t,angle=rand(-Math.PI,Math.PI)){const p=tilePos(t),speed=rand(290,490),distance=t.kind==='cat'?75:Math.max(30,28*tileScale(t));const ball=addBall(p.x+Math.cos(angle)*distance,p.y+Math.sin(angle)*distance,Math.cos(angle)*speed,Math.sin(angle)*speed,{color:c.color});if(ball&&t.kind==='cat')ball.catSafeUntil=state.worldTime+1.2;if(ball&&t.kind==='portal'){phys.setVel(ball,Math.cos(angle)*620,Math.sin(angle)*620);}}
+function releaseCapture(c,t,angle=rand(-Math.PI,Math.PI)){const p=tilePos(t),speed=rand(290,490),distance=t.kind==='cat'?64:Math.max(30,28*tileScale(t));const ball=addBall(p.x+Math.cos(angle)*distance,p.y+Math.sin(angle)*distance,Math.cos(angle)*speed,Math.sin(angle)*speed,{color:c.color});if(ball&&t.kind==='cat')ball.catSafeUntil=state.worldTime+1.2;if(ball&&t.kind==='portal'){phys.setVel(ball,Math.cos(angle)*620,Math.sin(angle)*620);}}
 function tapBoardReward(x,y){
  const worldY=y+state.cameraY;
  const nest=state.tiles.find(t=>!t.removed&&t.kind==='nest'&&t.captures.length>=3&&Math.abs(tilePos(t).x-x)<58&&Math.abs(tilePos(t).y-worldY)<60);
  if(nest){releaseNest(nest);return true;}
- const cat=state.tiles.find(t=>!t.removed&&t.kind==='cat'&&(t.catCharge>=3||t.captures.length>=2)&&Math.abs(tilePos(t).x-x)<58&&Math.abs(tilePos(t).y-worldY)<60);
+ const cat=state.tiles.find(t=>!t.removed&&t.kind==='cat'&&!t.caged&&t.room===state.gatesPassed&&(t.catCharge>=3||t.captures.length>=2)&&Math.abs(tilePos(t).x-x)<47&&Math.abs(tilePos(t).y-worldY)<49);
  if(cat){catHit(cat,null,true);return true;}return false;
 }
 function updateNest(t,dt){
@@ -786,6 +1125,9 @@ function updateNest(t,dt){
  for(const b of state.active){
   if(b.dead||b.held||t.captures.length>=t.capacity||(b.nestSafeUntil||0)>state.worldTime)continue;
   const dx=p.x-b.x,dy=p.y-b.y,d=Math.hypot(dx,dy);
+  if(state.worldTime<(t.lureUntil||0)&&d<145&&d>38){const strength=(1-d/150)*1500;
+   phys.applyAcceleration(b,dx/d*strength,dy/d*strength,dt);
+  }
   if(currentZone().symbol==='☾'&&d<115&&d>45)phys.applyAcceleration(b,dx*2-dy*1.5,dy*2+dx*1.5,dt);
   if(currentZone().symbol==='○'&&d<100)phys.applyAcceleration(b,dx*4,dy*2,dt);
   if(Math.abs(dx)<44&&b.y>p.y-27&&b.y<p.y+38){
@@ -871,17 +1213,62 @@ function merge(a,b,options={}){
  sound('merge',{x,family:f,tier:level});state.merges++;
  state.actions++;updateUI();return next;
 }
-function prePhysics(dt){updateCourse(dt);checkDistanceShower();for(const t of state.tiles){if(t.removed)continue;const p=tilePos(t);t.t+=dt;if(t.kind==='cat')updateCat(t,dt);if(t.kind==='nest')updateNest(t,dt);t.visualX=lerp(t.visualX,p.x,clamp(dt*10,0,1));t.visualY=lerp(t.visualY,p.y,clamp(dt*10,0,1));t.glow=Math.max(0,t.glow-dt*2);t.wobble*=Math.max(0,1-dt*5);t.charge=Math.max(0,t.charge-dt*.11);if(t.kind==='rotor'||t.kind==='sun'){t.angle+=t.spin*dt;t.spin*=Math.pow(.994,dt*60);phys.rotateTile(t);}if((t.kind==='bubble'||t.kind==='clock'||t.kind==='yarn'||t.kind==='bowl')&&t.captures.length){const oldest=t.captures[0];if(state.worldTime-oldest.t>(t.kind==='yarn'?7:t.kind==='clock'?6:8))releaseAll(t);}}
+function prePhysics(dt){updateCourse(dt);checkDistanceShower();for(const t of state.tiles){if(t.removed)continue;t.t+=dt;if(t.kind==='cat')updateCat(t,dt);if(t.kind==='nest')updateNest(t,dt);const p=tilePos(t);t.visualX=lerp(t.visualX,p.x,clamp(dt*10,0,1));t.visualY=lerp(t.visualY,p.y,clamp(dt*10,0,1));t.glow=Math.max(0,t.glow-dt*2);t.wobble*=Math.max(0,1-dt*5);t.charge=Math.max(0,t.charge-dt*.11);if(t.kind==='rotor'||t.kind==='sun'){t.angle+=t.spin*dt;t.spin*=Math.pow(.994,dt*60);phys.rotateTile(t);}if((t.kind==='bubble'||t.kind==='clock'||t.kind==='yarn'||t.kind==='bowl')&&t.captures.length){const oldest=t.captures[0];if(state.worldTime-oldest.t>(t.kind==='yarn'?7:t.kind==='clock'?6:8))releaseAll(t);}}
  const fields=state.tiles.filter(t=>!t.removed&&FIELD_TILE_KINDS.has(t.kind));
  for(const b of state.active){if(b.dead)continue;b.age+=dt;b.trail.push({x:b.x,y:b.y});if(b.trail.length>8)b.trail.shift();if(b.age>12&&Math.hypot(b.vx,b.vy)<60){phys.applyAcceleration(b,rand(-200,200),-260,dt);}if(b.age>12){removeBall(b);continue;}const bs=Math.hypot(b.vx,b.vy);if(bs>930)phys.setVel(b,b.vx*930/bs,b.vy*930/bs);
   for(const t of fields){const p=tilePos(t),dx=p.x-b.x,dy=p.y-b.y,d=Math.hypot(dx,dy);if(d>145||d<15)continue;const f=Math.pow(1-d/155,1.25);if(t.kind==='magnet'||t.kind==='yarn'){const force=t.kind==='magnet'?1400:600;phys.applyAcceleration(b,dx/d*force*f,dy/d*force*f,dt);}if(t.kind==='cloud'||t.kind==='dream')phys.applyAcceleration(b,0,-1700*f,dt);if(t.kind==='moon')phys.applyAcceleration(b,-dy/d*900*f,dx/d*900*f,dt);if(t.kind==='tree')phys.applyAcceleration(b,dx/d*400*f,-400*f,dt);}
  }
+}
+function openMarbleEscape(b){
+ const room=Math.max(0,Math.floor((b.y-CY)/(10*SY))),options=[];
+ for(let r=room*10+1;r<=room*10+7;r++)for(let c=0;c<COLS;c++){
+  const p=cellPos(r,c),distance=Math.hypot(p.x-b.x,p.y-b.y);
+  if(distance<30||distance>185||p.y<state.cameraY+125||p.y>state.cameraY+H-48)continue;
+  const solid=state.tiles.some(t=>!t.removed&&t.kind!=='nest'&&
+   Math.abs(tilePos(t).x-p.x)<(t.span===2?54:29)+b.r&&
+   Math.abs(tilePos(t).y-p.y)<(t.span===2?49:27)+b.r);
+  if(solid||state.active.some(other=>other!==b&&!other.dead&&Math.hypot(other.x-p.x,other.y-p.y)<b.r+other.r+6))continue;
+  options.push({...p,score:distance+(p.y<b.y?65:0)});
+ }
+ options.sort((a,c)=>a.score-c.score);return options[0]||null;
+}
+function recoverStuckBall(b){
+ if(b.dead||b.held)return false;
+ if(![b.x,b.y,b.vx,b.vy].every(Number.isFinite)){removeBall(b);return false;}
+ if(b.stallBoxAt===undefined){b.stallBoxAt=state.worldTime;
+  b.stallMinX=b.stallMaxX=b.x;b.stallMinY=b.stallMaxY=b.y;
+ }else{
+  b.stallMinX=Math.min(b.stallMinX,b.x);b.stallMaxX=Math.max(b.stallMaxX,b.x);
+  b.stallMinY=Math.min(b.stallMinY,b.y);b.stallMaxY=Math.max(b.stallMaxY,b.y);
+  if(state.worldTime-b.stallBoxAt>2.7){
+   if(b.age>2.5&&b.stallMaxX-b.stallMinX<72&&b.stallMaxY-b.stallMinY<72)b.stallBoxTriggered=true;
+   b.stallBoxAt=state.worldTime;b.stallMinX=b.stallMaxX=b.x;b.stallMinY=b.stallMaxY=b.y;
+  }
+ }
+ if(b.stallProbeAt===undefined){b.stallProbeAt=state.worldTime;b.stallProbeX=b.x;b.stallProbeY=b.y;return false;}
+ if(state.worldTime-b.stallProbeAt<.85)return false;
+ const traveled=Math.hypot(b.x-b.stallProbeX,b.y-b.stallProbeY);
+ b.stallWindows=traveled<13?(b.stallWindows||0)+1:b.stallBoxTriggered?2:0;
+ b.stallBoxTriggered=false;
+ b.stallProbeAt=state.worldTime;b.stallProbeX=b.x;b.stallProbeY=b.y;
+ if(b.stallWindows<2||state.worldTime-(b.lastUnstick??-99)<1.6)return false;
+ const stage=b.unstickCount||0;
+ if(stage>=1){const escape=openMarbleEscape(b);
+  if(escape){phys.moveBall(b,escape.x,escape.y);b.trail=[];b.stallProbeX=b.x;b.stallProbeY=b.y;}
+ }
+ const side=b.x<300?1:-1;
+ phys.setVel(b,side*(200+Math.min(2,stage)*75),-270-Math.min(2,stage)*65);
+ b.lastUnstick=state.worldTime;b.unstickCount=stage+1;b.stallWindows=0;
+ b.stallProbeAt=b.stallBoxAt=state.worldTime;b.stallProbeX=b.stallMinX=b.stallMaxX=b.x;b.stallProbeY=b.stallMinY=b.stallMaxY=b.y;
+ sparkle(b.x,b.y,'#f2d38f',8,.7);sound('unstick',{x:b.x});return true;
 }
 function postPhysics(dt){
  for(const fx of state.mergeFX)fx.age+=dt;state.mergeFX=state.mergeFX.filter(fx=>fx.age<fx.life);
  state.catLinks.forEach(l=>l.life-=dt);state.catLinks=state.catLinks.filter(l=>l.life>0);
  const ev=state.events.splice(0);for(const e of ev)impact(e.tile,e.ball,e.nx,e.ny);
  for(const b of state.active){
+  if(b.dead)continue;
+  recoverStuckBall(b);
   if(b.dead)continue;
   if(b.y>state.cameraY+H-10){drainBall(b);continue;}
   if(b.x<0||b.x>W||b.y>state.cameraY+H+100)removeBall(b);
@@ -1017,8 +1404,10 @@ function drawHopper(){
 function drawBorders(){const p=THEMES[state.phase],bottom=H-9;ctx.strokeStyle=p.ink;ctx.globalAlpha=.65;ctx.lineWidth=5;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(21,112);ctx.lineTo(21,bottom);ctx.moveTo(579,112);ctx.lineTo(579,bottom);ctx.stroke();ctx.globalAlpha=1;for(const y of [240,650]){ctx.fillStyle=p.accent;ellipse(21,y,3.5,6);ctx.fill();ellipse(579,y,3.5,6);ctx.fill();}}
 function drawCat(t){
  const spec=CAT_TYPES[t.catType],p=tilePos(t),age=state.worldTime-t.born;
- ctx.save();ctx.translate(t.visualX||p.x,(t.visualY||p.y)+Math.sin(state.worldTime*2+t.id)*2);
- const pop=age<.5?1+Math.sin(age*6)*.15:1;ctx.scale(pop,pop);
+ ctx.save();const jump=t.jump?Math.sin(Math.PI*clamp((state.worldTime-t.jump.start)/t.jump.duration,0,1))*34:0;
+ if(jump){ctx.fillStyle='#314c4c22';ellipse(t.visualX||p.x,(t.visualY||p.y)+42*FREED_CAT_SCALE,(36-jump*.32)*FREED_CAT_SCALE,(9-jump*.08)*FREED_CAT_SCALE);ctx.fill();}
+ ctx.translate(t.visualX||p.x,(t.visualY||p.y)-jump+Math.sin(state.worldTime*2+t.id)*2);
+ const pop=age<.5?1+Math.sin(age*6)*.15:1;const size=t.caged?1:FREED_CAT_SCALE;ctx.scale(pop*size,pop*size);
  ctx.strokeStyle=spec.color;ctx.lineWidth=11;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(35,24);ctx.bezierCurveTo(72,30,67,-25+Math.sin(t.t*3)*9,47,-13);ctx.stroke();
  ctx.fillStyle='#314c4c20';ellipse(0,43,45,9);ctx.fill();
  ctx.fillStyle=spec.color;ctx.strokeStyle=THEMES[state.phase].ink;ctx.lineWidth=2;roundedRect(-43,-30,86,76,28);ctx.fill();ctx.stroke();
@@ -1035,10 +1424,13 @@ function drawCat(t){
   if(t.catType===0){ctx.save();ctx.rotate(-t.swipe*.23);ctx.fillStyle='#ffe6b9';ellipse(37,-5,11,8);ctx.fill();ctx.restore();}
   if(t.catType===1&&t.carry){ctx.fillStyle=THEMES[state.phase].colors[FAMILY_COLORS.indexOf(t.carry.family)];roundedRect(-10,-67,22,22,5);ctx.fill();text('✦',0,-50,'15px Georgia','#fff5d6');}
   if(t.catType===3){ctx.save();ctx.translate(-30,15);ctx.rotate(state.worldTime*4);text('⚙',0,0,'21px serif','#fff1bf');ctx.restore();}
+  if(t.job?.kind==='fetch')text('◇',0,-71,'bold 21px Georgia','#e5efd2');
+  if(t.job?.kind==='deposit')text('↗',0,-71,'bold 20px Georgia','#e4ead8');
+  if(t.job?.kind==='wind')text('✳',0,-71,'bold 23px Georgia','#f7df8e');
  }
  for(let i=0;i<t.captures.length;i++){ctx.fillStyle=t.captures[i].color;ellipse(-13+(i%2)*20,12+Math.floor(i/2)*13,5,5);ctx.fill();}
  if(t.catCharge>=3){ctx.strokeStyle='#efd479';ctx.lineWidth=3;ctx.globalAlpha=.6+Math.sin(state.worldTime*4)*.25;roundedRect(-53,-54,106,107,24);ctx.stroke();ctx.globalAlpha=1;text('✦',39,-44,'18px Georgia','#c79c3e');}
- if(state.pointerDown&&Math.hypot(state.aimX-p.x,state.aimY-p.y)<85){ctx.strokeStyle=spec.color;ctx.globalAlpha=.5;ctx.setLineDash([4,5]);roundedRect(-53,-54,106,107,24);ctx.stroke();ctx.setLineDash([]);}
+ if(state.pointerDown&&Math.hypot(state.aimX-p.x,state.aimY-p.y)<110){ctx.strokeStyle=spec.color;ctx.globalAlpha=.7;ctx.setLineDash([4,5]);roundedRect(-53,-54,106,107,24);ctx.stroke();ctx.setLineDash([]);}
  if(t.caged){
   const tm=state.worldTime;ctx.fillStyle='#fff5d956';roundedRect(-54,-57,108,118,16);ctx.fill();
   ctx.strokeStyle='#aa895d';ctx.lineWidth=5;roundedRect(-54,-57,108,118,16);ctx.stroke();
@@ -1107,7 +1499,9 @@ function drawContraptions(){
   if(k.kind==='shutter'){ctx.beginPath();ctx.moveTo(k.x-90,k.y-31);ctx.quadraticCurveTo(k.nowX,k.nowY-26,k.nowX,k.nowY);ctx.stroke();}
   ctx.globalAlpha=1;ctx.translate(k.nowX,k.nowY);if(k.kind!=='shutter')ctx.rotate(time*.8+k.phase);
   const disabled=time<(k.disabledUntil||0);ctx.globalAlpha=disabled?.28:1;
-  ctx.fillStyle=k.kick?'#f7de90':k.kind==='shutter'?'#bd8b84':k.kind==='pendulum'?'#a9bfa2':'#deb979';
+  const wound=time<(k.boostUntil||0);
+  if(wound){ctx.strokeStyle='#f5d178';ctx.lineWidth=5;ellipse(0,0,k.radius+11,k.radius+11);ctx.stroke();ctx.strokeStyle=theme.ink;ctx.lineWidth=3;}
+  ctx.fillStyle=wound||k.kick?'#f7de90':k.kind==='shutter'?'#bd8b84':k.kind==='pendulum'?'#a9bfa2':'#deb979';
   if(k.kind==='shutter'){roundedRect(-53,-11,106,22,10);ctx.fill();ctx.stroke();ctx.strokeStyle='#fff7d8';ctx.lineWidth=2;
    for(let i=-2;i<=2;i++){ellipse(i*20,0,4,5);ctx.stroke();}
   }else{ellipse(0,0,k.radius,k.radius);ctx.fill();ctx.stroke();ctx.strokeStyle='#fff7d8';ctx.lineWidth=2;
@@ -1143,6 +1537,11 @@ function drawCourseScenery(){
 }
 function drawNest(t){
  const p=tilePos(t),n=t.captures.length,full=n>=8,ready=n>=3,zone=ZONES[Math.floor(t.room/2)%ZONES.length];ctx.save();ctx.translate(p.x,p.y);
+ if(state.worldTime<(t.lureUntil||0)){const left=clamp((t.lureUntil-state.worldTime)/2.4,0,1);
+  ctx.globalAlpha=.12+.24*left;ctx.strokeStyle='#7dbfb1';ctx.lineWidth=3.5;
+  for(let i=0;i<3;i++){ctx.beginPath();ctx.arc(0,0,65+i*22+Math.sin(state.worldTime*5-i)*4,0,TAU);ctx.stroke();}
+  ctx.globalAlpha=1;
+ }
  if(ready){ctx.strokeStyle=full?'#e2b84d':'#8fbaa2';ctx.globalAlpha=.4+Math.sin(state.worldTime*3)*.2;ctx.lineWidth=3;ctx.beginPath();ctx.arc(0,4,53+Math.sin(state.worldTime*3)*2,0,TAU);ctx.stroke();ctx.globalAlpha=1;}
  ctx.fillStyle=full?'#e9cf86':'#a7c0a1';ctx.strokeStyle='#56756b';ctx.lineWidth=2.2;ctx.beginPath();ctx.moveTo(-46,-18);ctx.lineTo(-40,29);ctx.quadraticCurveTo(0,58,40,29);ctx.lineTo(46,-18);ctx.quadraticCurveTo(0,1,-46,-18);ctx.closePath();ctx.fill();ctx.stroke();
  ctx.save();ctx.beginPath();ctx.rect(-43,-15,86,61);ctx.clip();for(let i=0;i<n;i++){const c=t.captures[i],x=-24+(i%4)*16,y=32-Math.floor(i/4)*15+Math.sin(state.worldTime*2+i)*.7;ctx.fillStyle='#365b53';ellipse(x,y,7,7);ctx.fill();ctx.fillStyle=c.color;ellipse(x-1,y-1,5.7,5.7);ctx.fill();ctx.fillStyle='#fff6de';ellipse(x-2,y-3,1.5,1.5);ctx.fill();}ctx.restore();
@@ -1282,6 +1681,9 @@ function drawMergeFX(){
  ctx.save();
  for(const fx of state.mergeFX){
   const u=clamp(fx.age/fx.life,0,1),ease=1-Math.pow(1-u,3);
+  if(fx.pulse){ctx.globalAlpha=(1-u)*.62;ctx.strokeStyle=fx.color;ctx.lineWidth=5*(1-u)+1.5;
+   ctx.beginPath();ctx.arc(fx.x,fx.y,12+ease*fx.radius,0,TAU);ctx.stroke();continue;
+  }
   ctx.globalAlpha=(1-u)*.76;
   ctx.fillStyle=fx.color;ctx.strokeStyle='#fff8e7';ctx.lineWidth=1.5;
   for(const [sx,sy] of [[fx.ax,fx.ay],[fx.bx,fx.by]]){
@@ -1327,5 +1729,5 @@ function loop(now){
 }
 clear();if(!restoreRun()){state.started=true;saveRun(true);}requestAnimationFrame(loop);
 // Introspectable for deterministic smoke-tests and debugging, without coupling gameplay to tests.
-window.Purrchinko={state,createShot,startFinalWave,reset:startNew,saveRun,restoreRun,aim:setAim,getPhysics:()=>phys,createTile,merge,matchingNeighbor,popNearby,activateBell,freeCat,catAbility,openGate,impact,updateContraptions,step:(n=1)=>{for(let i=0;i<n;i++)stepSimulation(1/60);},THEMES};
+window.Purrchinko={state,createShot,startFinalWave,reset:startNew,saveRun,restoreRun,aim:setAim,getPhysics:()=>phys,createTile,merge,matchingNeighbor,popNearby,activateBell,freeCat,catAbility,catHit,spitCat,catPulse,recoverStuckBall,openGate,impact,updateContraptions,step:(n=1)=>{for(let i=0;i<n;i++)stepSimulation(1/60);},THEMES};
 })();
