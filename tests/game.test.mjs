@@ -8,7 +8,7 @@ const root = new URL('../', import.meta.url);
 const source = readFileSync(new URL('game.js', root), 'utf8');
 const html = readFileSync(new URL('index.html', root), 'utf8');
 
-function loadGame(saved = new Map()) {
+function loadGame(saved = new Map(), initialSeed = 123456) {
   const handlers = new Map();
   const context2d = new Proxy({createRadialGradient: () => ({addColorStop() {}})}, {
     get: (target, key) => target[key] ?? (() => {}),
@@ -23,7 +23,7 @@ function loadGame(saved = new Map()) {
   const elements = Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, element()]));
   elements.ballCount.parentElement = element();
   const math = Object.create(Math);
-  let seed = 123456;
+  let seed = initialSeed;
   math.random = () => ((seed = (1664525 * seed + 1013904223) >>> 0) / 4294967296);
   const env = {
     Math: math, performance,
@@ -45,6 +45,7 @@ function loadGame(saved = new Map()) {
 
 function ringGate(game) {
   const gate = game.state.gates[game.state.gatesPassed];
+  if(gate.mode==='windup'&&!gate.wound)game.activateLever(game.state.tiles.find(t=>t.kind==='lever'&&t.room===gate.index));
   for (const index of [0, 2, 1]) {
     const bell = game.state.tiles.find(tile => tile.id === gate.switchIds[index]);
     while (gate.bolts[index] > 0) assert.equal(game.activateBell(bell), true);
@@ -126,6 +127,90 @@ test('bells open ordinary and boss gates once and retire passed contraptions', (
     assert.equal(game.state.reserve, reserve);
   }
   assert.ok(game.state.gates.length > 6);
+});
+
+test('generated chambers vary cats, cages, blockers, fans, and playable gate layouts', () => {
+  const cagePositions = new Set(), modes = new Set(), spans = new Set();
+  let blockers = 0, fans = 0;
+  for (let seed = 1; seed <= 12; seed++) {
+    const {game} = loadGame(new Map(), seed);
+    for (let room = 0; room < 12; room++) {
+      const gate = game.state.gates[room], cats = game.state.tiles.filter(t => !t.removed && t.kind === 'cat' && t.caged && t.room === room);
+      assert.equal(cats.length, 1, `Seed ${seed}, room ${room}: exactly one rescue`);
+      assert.equal(gate.row, room * 10 + 9);
+      modes.add(gate.mode);
+      for (const cat of cats) {
+        spans.add(cat.span);cagePositions.add(`${cat.r-room*10}/${cat.c}`);
+        for(let dr=0;dr<cat.span;dr++)for(let dc=0;dc<cat.span;dc++)
+          assert.equal(game.state.grid[cat.r+dr][cat.c+dc],cat,'cage occupies its actual footprint');
+      }
+      gate.maxBolts.forEach((count, index) => {
+        if (!count) return;
+        const bell = game.state.tiles.find(t => !t.removed && t.id === gate.switchIds[index]);
+        assert.ok(bell && bell.kind === 'switch', `Seed ${seed}, room ${room}, bell ${index} is intact`);
+        assert.equal(game.state.grid[bell.r][bell.c], bell);
+      });
+      if (gate.mode === 'windup') assert.ok(game.state.tiles.some(t => !t.removed && t.kind === 'lever' && t.room === room));
+      blockers += game.state.tiles.filter(t => !t.removed && t.bigBlocker && Math.floor(t.r/10)===room).length;
+      fans += game.state.kickers.filter(k => k.room===room && k.kind==='fan').length;
+      ringGate(game);
+    }
+  }
+  assert.ok(modes.has('duet')&&modes.has('solo')&&modes.has('relay')&&modes.has('windup')&&modes.has('boss'));
+  assert.ok(spans.has(1)&&spans.has(2));
+  assert.ok(cagePositions.size >= 6);
+  assert.ok(blockers>0&&fans>0);
+});
+
+test('ordered and wind-up gates enforce their distinct mechanisms and survive reload', () => {
+  const {game,saved} = loadGame();
+  for(let room=0;room<4;room++)ringGate(game);
+  const relay=game.state.gates[4];
+  assert.equal(relay.mode,'relay');
+  const later=game.state.tiles.find(t=>t.id===relay.switchIds[2]);
+  assert.equal(game.activateBell(later),false);
+  assert.equal(relay.bolts[2],relay.maxBolts[2]);
+  ringGate(game);ringGate(game);
+  const gate=game.state.gates[6],bell=game.state.tiles.find(t=>t.id===gate.switchIds[0]);
+  assert.equal(gate.mode,'windup');
+  assert.equal(game.activateBell(bell),false);
+  assert.equal(gate.bolts[0],gate.maxBolts[0]);
+  const lever=game.state.tiles.find(t=>t.kind==='lever'&&t.room===6);
+  game.activateLever(lever);
+  assert.equal(gate.wound,true);
+  game.saveRun(true);
+  const restored=loadGame(saved).game;
+  assert.equal(restored.state.gates[6].wound,true);
+  ringGate(restored);
+  assert.equal(restored.state.gatesPassed,7);
+});
+
+test('one rescued cat acts and retires safely after its gate', () => {
+  const {game,saved}=loadGame();ringGate(game);
+  const cats=game.state.tiles.filter(t=>t.kind==='cat'&&t.room===1&&t.caged);
+  assert.equal(cats.length,1);
+  const [miso]=cats;game.freeCat(miso);
+  assert.equal(miso.catType,1);
+  assert.equal(game.catAbility(miso),true);
+  game.state.boostUntil=-99;game.createShot();
+  const ball=game.state.active[0];
+  Object.assign(ball,{x:miso.roamX+20,y:miso.roamY,vx:0,vy:0});
+  assert.equal(game.catHit(miso,ball),true);
+  game.saveRun(true);
+  const restored=loadGame(saved).game;
+  assert.equal(restored.state.tiles.filter(t=>t.kind==='cat'&&!t.caged&&!t.removed&&t.room===1).length,1);
+  ringGate(restored);
+  assert.equal(restored.state.tiles.filter(t=>t.kind==='cat'&&!t.caged&&!t.removed).length,0);
+});
+
+test('a wind fan accelerates existing marbles without creating new ones', () => {
+  const {game}=loadGame();ringGate(game);ringGate(game);
+  const fan=game.state.kickers.find(k=>k.room===2&&k.kind==='fan');assert.ok(fan);
+  game.state.kickers=[fan];game.state.starPegs=[];game.state.cameraY=1040;
+  game.state.boostUntil=-99;game.createShot();const ball=game.state.active[0];
+  Object.assign(ball,{x:fan.x+30,y:fan.y+55,vx:0,vy:0});
+  game.updateContraptions(1/60);
+  assert.ok(ball.vy<0);assert.ok(ball.vx>0);assert.equal(game.state.active.length,1);
 });
 
 test('merging adjacent blocks evolves one cell and preserves the ordinary marble', () => {
@@ -211,6 +296,7 @@ test('Pepper deposits captured ordinary marbles into a nest instead of spawning 
   const cat = game.state.tiles.find(t => t.kind === 'cat' && t.room === 0);
   game.freeCat(cat);cat.catType = 2;game.state.boostUntil = -99;
   const nest = game.state.tiles.find(t => t.kind === 'nest' && t.room === 0),before = nest.captures.length;
+  cat.roamX=60+(nest.c+.5)*60+100;cat.roamY=137+(nest.r+.5)*52;
   cat.captures.push(...Array.from({length: 3}, () => ({color: '#f7e0ad', t: 0})));
   game.step(2);
   assert.equal(nest.captures.length, before + 3);
@@ -223,6 +309,7 @@ test('Pepper delivery makes a short-lived nest attraction field', () => {
   const cat=game.state.tiles.find(t=>t.kind==='cat'&&t.room===0);
   game.freeCat(cat);cat.catType=2;game.state.boostUntil=-99;
   const nest=game.state.tiles.find(t=>t.kind==='nest'&&t.room===0);
+  cat.roamX=60+(nest.c+.5)*60+100;cat.roamY=137+(nest.r+.5)*52;
   cat.captures.push(...Array.from({length:3},()=>({color:'#f7e0ad',t:0})));
   game.step(2);
   assert.ok(nest.lureUntil>game.state.worldTime);
@@ -281,12 +368,14 @@ test('Sunny autonomously reaches an underpowered machine without marble contact'
 
 test('a saved mid-jump cat lands safely and remains off the occupied grid', () => {
   const {game, saved} = loadGame();
-  const cat = game.state.tiles.find(t => t.kind === 'cat' && t.room === 0);
-  game.freeCat(cat);cat.catType = 3;game.state.boostUntil = -99;
-  for(let i=0;i<600&&!cat.jump;i++)game.step(1);
-  assert.ok(cat.jump, 'Blocked cats should find an empty landing spot and hop to it');
+  const cage = game.state.tiles.find(t => t.kind === 'cat' && t.room === 0);
+  game.freeCat(cage);game.state.boostUntil = -99;
+  const trio = () => game.state.tiles.filter(t => !t.removed && t.kind === 'cat' && !t.caged && t.room === 0);
+  let jumper = null;
+  for(let i=0;i<600&&!jumper;i++){game.step(1);jumper=trio().find(u=>u.jump)||null;}
+  assert.ok(jumper, 'Blocked cats should find an empty landing spot and hop to it');
   game.saveRun(true);
-  const restored=loadGame(saved).game, survivor=restored.state.tiles.find(t => t.id === cat.id);
+  const restored=loadGame(saved).game, survivor=restored.state.tiles.find(t => t.id === jumper.id);
   assert.ok(survivor.jump);
   restored.step(60);
   assert.equal(survivor.jump, null);
@@ -391,7 +480,8 @@ test('each room has only its own freed cat; previous cats retire at the gate', (
     assert.ok(cat,`Room ${room} contains its own cat`);
     assert.equal(game.state.tiles.filter(t => t.kind==='cat' && !t.removed && !t.caged).length,0);
     game.freeCat(cat);cats.push(cat);
-    assert.equal(game.state.tiles.filter(t => t.kind==='cat' && !t.removed && !t.caged).length,1);
+    const expected = cat.catType === 0 ? 3 : 1;
+    assert.equal(game.state.tiles.filter(t => t.kind==='cat' && !t.removed && !t.caged).length,expected);
     ringGate(game);
     assert.equal(cat.removed,true);
     assert.equal(game.state.tiles.filter(t => t.kind==='cat' && !t.removed && !t.caged).length,0);
@@ -569,7 +659,7 @@ test('gate audio retains the full latch and chime when ordinary effects are satu
 });
 
 test('cat-specific sound cues synthesize within the effect voice budget', () => {
-  const events=['swat','fetch','drop','catch','deposit','wind','hop','land','unstick'];
+  const events=['swat','fetch','drop','catch','deposit','wind','hop','land','unstick','bell','cage','lever'];
   const notes=[];
   const param=()=>({setValueAtTime(value){notes.push(value);},linearRampToValueAtTime(){},exponentialRampToValueAtTime(){}});
   const node=()=>({frequency:param(),gain:param(),Q:{},pan:{},connect(){},disconnect(){},start(){},stop(){}});
@@ -582,6 +672,48 @@ test('cat-specific sound cues synthesize within the effect voice budget', () => 
   for(const event of events){env.audio.currentTime+=1;vm.runInContext(`sound('${event}',{x:210})`,env);}
   assert.ok(notes.length>events.length*2,'Each interaction should have a layered musical cue');
   assert.ok(vm.runInContext('voices',env)<=48,'Busy interactions should respect the limiter');
+});
+
+test('each chamber generates exactly one cat cage', () => {
+  for (let seed = 1; seed <= 6; seed++) {
+    const {game} = loadGame(new Map(), seed);
+    for (let room = 0; room < 8; room++) {
+      const cats = game.state.tiles.filter(t => !t.removed && t.kind === 'cat' && t.caged && t.room === room);
+      assert.equal(cats.length, 1, `Seed ${seed}, room ${room}: exactly one cage`);
+      ringGate(game);
+    }
+  }
+});
+
+test('freed kittens are three independent units spread across the gate', () => {
+  const {game} = loadGame();
+  const cage = game.state.tiles.find(t => t.kind === 'cat' && t.room === 0);
+  game.freeCat(cage);
+  assert.equal(cage.catType, 0);
+  game.state.boostUntil = -99;
+  const trio = () => game.state.tiles.filter(t => !t.removed && t.kind === 'cat' && !t.caged && t.room === 0);
+  assert.equal(trio().length, 3);
+  const spread = arr => Math.max(...arr) - Math.min(...arr);
+  assert.ok(spread(trio().map(t => t.roamX)) > 150, `kittens spread across the gate: ${trio().map(t => t.roamX.toFixed(0))}`);
+  for (const [i, j] of [[0, 1], [0, 2], [1, 2]]) {
+    const [a, b] = [trio()[i], trio()[j]];
+    assert.ok(Math.hypot(a.roamX - b.roamX, a.roamY - b.roamY) > 50, `kittens ${i} and ${j} are separate units`);
+  }
+  const paths = [0, 0, 0];
+  let prev = trio().map(t => ({x: t.roamX, y: t.roamY, id: t.id}));
+  for (let s = 0; s < 6; s++) {
+    game.step(10);
+    assert.equal(trio().length, 3);
+    const now = trio().map(t => ({x: t.roamX, y: t.roamY, id: t.id}));
+    now.forEach((p, i) => {
+      const q = prev.find(r => r.id === p.id) || prev[i];
+      paths[i] += Math.hypot(p.x - q.x, p.y - q.y);
+    });
+    prev = now;
+  }
+  assert.ok(paths.every(p => p > 2), `each kitten roams on its own: ${paths.map(p => p.toFixed(1))}`);
+  assert.ok(Math.max(...paths) - Math.min(...paths) > 1, 'kittens do not move identical distances');
+  assert.ok(spread(trio().map(t => t.roamX)) > 120, 'trio stays spread instead of collapsing to one unit');
 });
 
 test('standalone is generated from the current game, styles, and HTML', () => {
